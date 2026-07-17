@@ -4,7 +4,6 @@
 #include <Arduino.h>
 #include <SPI.h>
 #include <SD.h>
-#include <TFT_eSPI.h>
 
 //velocidade comunicação serial
 constexpr unsigned long SERIAL_BAUD_RATE = 115200;
@@ -40,4 +39,8 @@ constexpr uint16_t NUM_LEDS = 6;
 
 #ifndef TFT_RST
 #define TFT_RST 17
+#endif
+
+#ifndef TFT_BL
+#define TFT_BL 22
 #endif

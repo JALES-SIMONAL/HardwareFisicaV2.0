@@ -15,7 +15,8 @@ void setup() {
   pinMode(ENC_KEY_PIN, INPUT_PULLUP);
 
   ihm::init();
-  ihm::escreverTextoTela("IHM pronta", 10, 10, 0x07E0, 2, true);
+  ihm::escreverTelaApp("HardwareFisica", "IHM pronta",
+					 "Encoder aguardando", true);
 
   Serial.println("Encoder pronto");
 }
@@ -30,7 +31,7 @@ void loop() {
 
     char linha[24];
     snprintf(linha, sizeof(linha), "Encoder: %d", posicaoAtual);
-    ihm::escreverTextoTela(linha, 10, 40, 0xFFFF, 2, false);
+    ihm::escreverTelaApp("HardwareFisica", linha, "Gire o encoder");
 
     for (uint16_t i = 0; i < NUM_LEDS; i++) {
       ihm::controlarLED(i, 0, 0, 0, 30);

@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "PowerShell(cd \"c:\\\\Users\\\\wilson\\\\Documents\\\\PlatformIO\\\\Projects\\\\HardwareFisicaV2.0\"; & \"$env:USERPROFILE\\\\.platformio\\\\penv\\\\Scripts\\\\pio.exe\" run 2>&1 | Select-Object -Last 120)",
+      "PowerShell(cd \"c:\\\\Users\\\\wilson\\\\Documents\\\\PlatformIO\\\\Projects\\\\HardwareFisicaV2.0\"; & \"$env:USERPROFILE\\\\.platformio\\\\penv\\\\Scripts\\\\pio.exe\" run 2>&1 | Select-Object -Last 150)"
+    ]
+  }
+}

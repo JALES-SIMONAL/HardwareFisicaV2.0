@@ -44,3 +44,86 @@ constexpr uint16_t NUM_LEDS = 6;
 #ifndef TFT_BL
 #define TFT_BL 22
 #endif
+
+// ---------------------------------------------------------------------
+// Canais de sensores
+// ---------------------------------------------------------------------
+// Quantidade de canais de sensores suportados pelo equipamento.
+constexpr uint8_t NUM_CHANNELS = 6;
+
+// ATENCAO: PINAGEM A CONFIRMAR.
+// Nao existe, no repositorio, um documento de conexoes/pinagem de hardware
+// nem diagrama funcional para os canais de sensores. Os GPIOs abaixo sao
+// placeholders plausiveis (livres na esp32doit-devkit-v1, evitando pinos de
+// strapping/flash e os pinos ja usados pelo encoder/NeoPixel/TFT) para que o
+// firmware compile e fique estruturalmente pronto. Ajuste os valores reais
+// aqui antes de qualquer upload para o hardware.
+constexpr uint8_t CHANNEL_PINS[NUM_CHANNELS] = {34, 35, 36, 39, 4, 13};
+
+// ---------------------------------------------------------------------
+// Cartao microSD (compartilha o barramento SPI do TFT: MOSI/MISO/SCK)
+// ---------------------------------------------------------------------
+// ATENCAO: PINAGEM A CONFIRMAR (mesmo motivo do bloco de canais acima).
+constexpr uint8_t SD_CS_PIN = 15;
+
+// ---------------------------------------------------------------------
+// Buzzer
+// ---------------------------------------------------------------------
+// ATENCAO: PINAGEM A CONFIRMAR (mesmo motivo do bloco de canais acima).
+constexpr uint8_t BUZZER_PIN = 27;
+
+// ---------------------------------------------------------------------
+// Filas, buffers e limites configuraveis
+// ---------------------------------------------------------------------
+// Tamanho da fila de eventos brutos de borda (ISR -> tarefa de aquisicao).
+constexpr uint16_t EVENT_QUEUE_LEN = 64;
+// Tamanho da fila de linhas CSV prontas (aquisicao -> tarefa de armazenamento).
+constexpr uint16_t CSV_LINE_QUEUE_LEN = 64;
+// Quantidade de linhas acumuladas no buffer antes de um flush no microSD.
+constexpr uint16_t STORAGE_FLUSH_THRESHOLD = 16;
+// Quantidade maxima de repeticoes permitida em um experimento livre.
+constexpr uint16_t MAX_REPETICOES = 100;
+// Filtro de debounce dos sensores digitais, em microssegundos.
+constexpr uint32_t SENSOR_DEBOUNCE_US = 1000;
+
+// ---------------------------------------------------------------------
+// Diagnóstico de boot/display (temporário — ajuda a confirmar que o
+// display físico está de fato recebendo dados e que o backlight está
+// aceso antes de investigar problemas de hardware).
+// ---------------------------------------------------------------------
+// Quando true, logo após display->begin() ter sucesso, roda uma sequência
+// rápida vermelho/verde/azul/preto + texto, dentro do firmware completo
+// (não é um sketch separado), só para confirmar visualmente o objeto real
+// usado pela IHM. Não bloqueia a sequência inicial normal.
+constexpr bool ENABLE_DISPLAY_STARTUP_TEST = true;
+
+// Quando true, força o duty do PWM do backlight para o máximo em tempo de
+// execução (só no valor aplicado ao ledcWrite), mesmo que o brilho salvo
+// na NVS seja baixo/zero — só para diagnóstico. Não altera nem grava o
+// valor persistido em Preferences/NVS.
+constexpr bool FORCE_MAX_BRIGHTNESS_FOR_DIAGNOSTIC = true;
+
+// Quando true, ihm::setBrilho() NEM CHAMA ledcWrite(): o backlight fica só
+// no digitalWrite(TFT_BL, HIGH) já feito em ihm::init(), sem passar pelo
+// canal LEDC/PWM. Mais forte que FORCE_MAX_BRIGHTNESS_FOR_DIAGNOSTIC — usa
+// isto para descartar totalmente o PWM como causa de um backlight apagado
+// (elimina qualquer suspeita de canal/frequência/resolução do LEDC).
+constexpr bool FORCE_DISPLAY_BACKLIGHT_DIAGNOSTIC = true;
+
+// Intervalo mínimo (ms) entre redesenhos da tela atual — evita que giros
+// rápidos do encoder disparem múltiplos redesenhos completos no mesmo
+// instante (reduz flicker); não é usado para paginar a leitura do encoder
+// em si, só para agrupar redesenhos muito próximos no tempo.
+constexpr uint32_t UI_UPDATE_INTERVAL_MS = 16;
+
+// Duração total (ms) da etapa de diagnóstico visual do display (vermelho/
+// verde/azul/"Display OK") dentro da sequência de boot — é uma etapa da
+// própria máquina de estados (maquina_estados::EtapaBoot), controlada por
+// millis(), não uma espera separada em ihm::init(). Depois desse tempo, o
+// boot avança automaticamente para o logotipo.
+constexpr uint32_t DISPLAY_DIAGNOSTIC_DURATION_MS = 1500;
+
+// Brilho (0-255) dos NeoPixel durante os testes de diagnóstico (teste
+// visual do display e teste inicial dos 6 LEDs), independente do brilho
+// normal usado depois pela indicação dos canais.
+constexpr uint8_t LED_STARTUP_BRIGHTNESS = 80;

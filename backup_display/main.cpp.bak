@@ -1,0 +1,60 @@
+#include <Arduino.h>
+#include <freertos/FreeRTOS.h>
+#include <freertos/task.h>
+
+#include "MAIN.HPP"
+#include "aquisicao.hpp"
+#include "armazenamento.hpp"
+#include "autoteste.hpp"
+#include "canais.hpp"
+#include "configuracoes.hpp"
+#include "experimentos.hpp"
+#include "ihm.hpp"
+#include "maquina_estados.hpp"
+#include "mqtt_app.hpp"
+
+namespace {
+
+// Núcleo 0: drena a fila de eventos brutos da ISR de aquisição (aplicando
+// o filtro de borda) e, em seguida, descarrega a fila de linhas CSV para o
+// microSD. As duas etapas ficam na mesma tarefa de propósito: ambas usam
+// filas FreeRTOS (thread-safe) para se desacoplar da ISR e da IHM, e a
+// escrita no cartão é sempre em blocos pequenos e limitados
+// (STORAGE_FLUSH_THRESHOLD linhas), então nunca atrasa a próxima leitura de
+// evento por muito tempo — sem precisar de duas tarefas separadas.
+void tarefaAquisicaoArmazenamento(void* /*parametro*/) {
+  for (;;) {
+    aquisicao::processarFilaEventos();
+    armazenamento::processarFila();
+    vTaskDelay(pdMS_TO_TICKS(2));
+  }
+}
+
+}  // namespace
+
+// main.cpp fica pequeno: só inicializa os módulos, cria a tarefa do núcleo
+// 0 e entra no laço da máquina de estados. O laço padrão do Arduino-ESP32
+// (loop()) já roda como "loopTask" pinada ao núcleo 1 (APP_CPU) — é, na
+// prática, a tarefa de IHM/MQTT descrita no plano, sem precisar recriá-la.
+void setup() {
+  Serial.begin(SERIAL_BAUD_RATE);
+
+  ihm::init();
+  configuracoes::init();
+  canais::init();
+  aquisicao::init();
+  armazenamento::init();
+  experimentos::init();
+  mqtt_app::init();  // Wi-Fi/MQTT: assíncrono, não bloqueia o restante
+  maquina_estados::init();
+
+  // No-op quando ENABLE_FIRMWARE_SELF_TESTS==0 (padrão); ver autoteste.hpp.
+  autoteste::executar();
+
+  xTaskCreatePinnedToCore(tarefaAquisicaoArmazenamento, "AquisicaoArmazenamento", 4096, nullptr, 2,
+                           nullptr, 0);
+}
+
+void loop() {
+  maquina_estados::tick();
+}

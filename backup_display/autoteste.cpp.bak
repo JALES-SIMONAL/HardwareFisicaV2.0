@@ -1,0 +1,187 @@
+#include "autoteste.hpp"
+
+#if ENABLE_FIRMWARE_SELF_TESTS
+
+#include <Arduino.h>
+
+#include "MAIN.HPP"
+#include "analise_dados.hpp"
+#include "canais.hpp"
+#include "comandos.hpp"
+#include "configuracoes.hpp"
+
+namespace autoteste {
+
+namespace {
+
+using comandos::EdgeMode;
+
+uint16_t totalTestes = 0;
+uint16_t totalFalhas = 0;
+
+void checar(bool condicao, const char* nomeCaso) {
+  totalTestes++;
+  if (condicao) {
+    Serial.printf("[AUTOTESTE] PASS  %s\n", nomeCaso);
+  } else {
+    totalFalhas++;
+    Serial.printf("[AUTOTESTE] FAIL  %s\n", nomeCaso);
+  }
+}
+
+// ---------------------------------------------------------------------
+// canais::isTransitionEnabled — Falling / Rising / Both (Fase 32, itens 1-3)
+// ---------------------------------------------------------------------
+void testarFiltroBordas() {
+  // Falling: HIGH->LOW aceita, LOW->HIGH rejeita, igual->igual rejeita.
+  checar(canais::isTransitionEnabled(EdgeMode::Falling, true, false) == true,
+         "Falling: HIGH->LOW aceita");
+  checar(canais::isTransitionEnabled(EdgeMode::Falling, false, true) == false,
+         "Falling: LOW->HIGH rejeita");
+  checar(canais::isTransitionEnabled(EdgeMode::Falling, true, true) == false,
+         "Falling: sem mudanca rejeita");
+
+  // Rising: LOW->HIGH aceita, HIGH->LOW rejeita.
+  checar(canais::isTransitionEnabled(EdgeMode::Rising, false, true) == true,
+         "Rising: LOW->HIGH aceita");
+  checar(canais::isTransitionEnabled(EdgeMode::Rising, true, false) == false,
+         "Rising: HIGH->LOW rejeita");
+  checar(canais::isTransitionEnabled(EdgeMode::Rising, false, false) == false,
+         "Rising: sem mudanca rejeita");
+
+  // Both: aceita as duas direções, nunca sem mudança real.
+  checar(canais::isTransitionEnabled(EdgeMode::Both, true, false) == true,
+         "Both: HIGH->LOW aceita");
+  checar(canais::isTransitionEnabled(EdgeMode::Both, false, true) == true,
+         "Both: LOW->HIGH aceita");
+  checar(canais::isTransitionEnabled(EdgeMode::Both, false, false) == false,
+         "Both: sem mudanca rejeita");
+}
+
+// ---------------------------------------------------------------------
+// canais: configurar todos / individual / restauração / índice (Fase 32,
+// itens 4-7)
+// ---------------------------------------------------------------------
+void testarConfiguracaoCanais() {
+  // Preserva o estado atual do canal 1 para não deixar efeito colateral
+  // permanente do autoteste na configuração salva pelo usuário.
+  const EdgeMode modoOriginalCanal1 = canais::obterModo(1);
+
+  canais::definirTodos(EdgeMode::Rising);
+  bool todosRising = true;
+  for (uint8_t c = 1; c <= NUM_CHANNELS; c++) {
+    if (canais::obterModo(c) != EdgeMode::Rising) todosRising = false;
+  }
+  checar(todosRising, "definirTodos: aplica o mesmo modo a todos os canais");
+
+  canais::definirModo(1, EdgeMode::Falling);
+  checar(canais::obterModo(1) == EdgeMode::Falling,
+         "definirModo: altera somente o canal indicado");
+  checar(NUM_CHANNELS < 2 || canais::obterModo(2) == EdgeMode::Rising,
+         "definirModo: nao altera os demais canais");
+
+  canais::restaurarPadrao();
+  bool todosBoth = true;
+  for (uint8_t c = 1; c <= NUM_CHANNELS; c++) {
+    if (canais::obterModo(c) != EdgeMode::Both) todosBoth = false;
+  }
+  checar(todosBoth, "restaurarPadrao: define todos os canais como Both");
+
+  // Índices fora de faixa (0 e NUM_CHANNELS+1) devem ser ignorados/seguros,
+  // nunca ler/escrever fora do array configuracaoCanais[NUM_CHANNELS].
+  checar(canais::obterModo(0) == EdgeMode::Both, "obterModo(0): retorna padrao seguro");
+  checar(canais::obterModo(NUM_CHANNELS + 1) == EdgeMode::Both,
+         "obterModo(NUM_CHANNELS+1): retorna padrao seguro");
+  canais::definirModo(0, EdgeMode::Falling);
+  canais::definirModo(NUM_CHANNELS + 1, EdgeMode::Falling);
+  checar(canais::obterModo(1) == EdgeMode::Both,
+         "definirModo com indice invalido: nao corrompe canal 1");
+
+  // Restaura o modo original do canal 1 (evita efeito colateral do teste).
+  canais::definirModo(1, modoOriginalCanal1);
+}
+
+// ---------------------------------------------------------------------
+// analise_dados: cálculo de intervalo/velocidade (Fase 32, itens 10-11)
+// ---------------------------------------------------------------------
+void testarAnaliseDados() {
+  float velocidade = 0.0f;
+
+  // deltaTUs positivo: 2s para percorrer 1m => 0.5 m/s.
+  checar(analise_dados::calcularVelocidade(2000000, 1.0f, velocidade) == true,
+         "calcularVelocidade: aceita intervalo positivo");
+  checar(velocidade > 0.499f && velocidade < 0.501f,
+         "calcularVelocidade: 1m em 2s = 0.5 m/s");
+
+  // deltaTUs zero ou negativo: nunca calcula (evita divisao por zero /
+  // resultado sem sentido fisico).
+  checar(analise_dados::calcularVelocidade(0, 1.0f, velocidade) == false,
+         "calcularVelocidade: rejeita intervalo zero");
+  checar(analise_dados::calcularVelocidade(-100, 1.0f, velocidade) == false,
+         "calcularVelocidade: rejeita intervalo negativo");
+}
+
+// ---------------------------------------------------------------------
+// Conversão de estado digital para 'H'/'L' usada no CSV (Fase 32, item 12).
+// A conversão real é um único operador ternário embutido em
+// experimentos.cpp (novoEstado ? 'H' : 'L'); replicado aqui para garantir
+// que a convenção H=HIGH / L=LOW documentada no formato CSV é a que se
+// espera em todo o firmware.
+// ---------------------------------------------------------------------
+void testarConversaoEstado() {
+  const bool nivelAlto = true;
+  const bool nivelBaixo = false;
+  checar((nivelAlto ? 'H' : 'L') == 'H', "estado HIGH converte para 'H'");
+  checar((nivelBaixo ? 'H' : 'L') == 'L', "estado LOW converte para 'L'");
+}
+
+// ---------------------------------------------------------------------
+// Limites de brilho/volume (0..30) e de repetições (MAX_REPETICOES)
+// (Fase 32, itens 14-16). Usa as constantes reais de configuracoes.hpp e
+// MAIN.HPP para não duplicar "números mágicos" no teste.
+// ---------------------------------------------------------------------
+void testarLimites() {
+  checar(configuracoes::NIVEL_MINIMO == 0, "NIVEL_MINIMO e 0");
+  checar(configuracoes::NIVEL_MAXIMO == 30, "NIVEL_MAXIMO e 30");
+
+  const uint8_t brilhoOriginal = configuracoes::brilho();
+  configuracoes::definirBrilho(255);
+  checar(configuracoes::brilho() == configuracoes::NIVEL_MAXIMO,
+         "definirBrilho: satura em NIVEL_MAXIMO quando acima do limite");
+  configuracoes::definirBrilho(brilhoOriginal);
+
+  const uint8_t volumeOriginal = configuracoes::volume();
+  configuracoes::definirVolume(255);
+  checar(configuracoes::volume() == configuracoes::NIVEL_MAXIMO,
+         "definirVolume: satura em NIVEL_MAXIMO quando acima do limite");
+  configuracoes::definirVolume(volumeOriginal);
+
+  checar(MAX_REPETICOES > 0, "MAX_REPETICOES configurado (> 0)");
+}
+
+}  // namespace
+
+void executar() {
+  totalTestes = 0;
+  totalFalhas = 0;
+
+  Serial.println("[AUTOTESTE] ===== Iniciando autotestes internos =====");
+  testarFiltroBordas();
+  testarConfiguracaoCanais();
+  testarAnaliseDados();
+  testarConversaoEstado();
+  testarLimites();
+  Serial.printf("[AUTOTESTE] ===== Resultado: %u/%u passaram (%u falha(s)) =====\n",
+                static_cast<unsigned>(totalTestes - totalFalhas), static_cast<unsigned>(totalTestes),
+                static_cast<unsigned>(totalFalhas));
+}
+
+}  // namespace autoteste
+
+#else
+
+namespace autoteste {
+void executar() {}
+}  // namespace autoteste
+
+#endif  // ENABLE_FIRMWARE_SELF_TESTS

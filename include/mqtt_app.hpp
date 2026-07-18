@@ -11,12 +11,12 @@ namespace mqtt_app {
 // ATENCAO: nenhuma credencial real foi fornecida. Ajuste estas constantes
 // (único lugar) antes de usar em campo. A senha nunca é exibida na tela ou
 // em logs normais.
-constexpr const char* WIFI_SSID = "PLACEHOLDER_WIFI_SSID";
-constexpr const char* WIFI_PASSWORD = "PLACEHOLDER_WIFI_PASSWORD";
+constexpr const char* WIFI_SSID = "LANCE-IoT";
+constexpr const char* WIFI_PASSWORD = "lance@2024";
 constexpr const char* BROKER_HOST = "PLACEHOLDER_BROKER_HOST";
 constexpr uint16_t BROKER_PORT = 1883;
-constexpr const char* BROKER_USUARIO = "";
-constexpr const char* BROKER_SENHA = "";
+constexpr const char* BROKER_USUARIO = "ufrn-DFTE";
+constexpr const char* BROKER_SENHA = "wilson";
 
 // Prefixo dos tópicos: "<prefixo>/<device_id>/{command,state,event,channels,file,status}".
 constexpr const char* TOPICO_PREFIXO = "hardwarefisica";

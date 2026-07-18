@@ -49,8 +49,7 @@ void redesenharValorComVoltar(const char* titulo, int32_t valorExibido, int32_t 
 // ---------------------------------------------------------------------
 enum class EtapaBoot : uint8_t {
   DiagnosticoDisplay,
-  LogoMonkeyTech,
-  LogoUFRN,
+  Logos,
   LedVermelho,
   LedAzul,
   LedVerde,
@@ -66,8 +65,7 @@ bool etapaBootDesenhada = false;
 const char* nomeEtapaBoot(EtapaBoot etapa) {
   switch (etapa) {
     case EtapaBoot::DiagnosticoDisplay: return "DIAGNOSTICO_DISPLAY";
-    case EtapaBoot::LogoMonkeyTech: return "LOGOTIPO_MONKEY_TECH";
-    case EtapaBoot::LogoUFRN: return "LOGOTIPO_UFRN";
+    case EtapaBoot::Logos: return "LOGOTIPO";
     case EtapaBoot::LedVermelho: return "TESTE_LEDS_VERMELHO";
     case EtapaBoot::LedAzul: return "TESTE_LEDS_AZUL";
     case EtapaBoot::LedVerde: return "TESTE_LEDS_VERDE";
@@ -85,27 +83,18 @@ void avancarBoot(EtapaBoot proxima) {
   Serial.printf("[STARTUP] Estado: %s\n", nomeEtapaBoot(etapaBootAtual));
 }
 
-// Tenta desenhar o BMP correspondente lido do microSD (arquivo esperado na
-// raiz do cartão, nomes 8.3 por segurança de compatibilidade); se o
-// cartão estiver indisponível, o arquivo não existir ou o formato não for
-// suportado, cai no texto simples — nunca trava nem deixa a tela em
-// branco. Ver docs/VALIDACAO_GERAL.md para os nomes de arquivo esperados.
+// Os arquivos docs/Monkey Tech.bmp e docs/UFRN.bmp existem no repositório,
+// mas ainda não foram convertidos para um formato embarcável (PROGMEM).
+// Esta função isolada usa texto por enquanto; quando os bitmaps estiverem
+// prontos, troque só o corpo desta função.
 void desenharLogoMonkeyTech() {
-  const int16_t largura = layout::uiWidth(layout::UI_REFERENCE_WIDTH);
-  const int16_t altura = layout::uiHeight(layout::UI_REFERENCE_HEIGHT);
-  if (!ihm::desenharImagemBMP("MONKEY.BMP", 0, 0, largura, altura)) {
-    ihm::escreverTextoTela("Monkey Tech", layout::uiMargin(), layout::uiHeight(40),
-                            0xFFFF, layout::uiFontSize(1), true);
-  }
+  ihm::escreverTextoTela("Monkey Tech", layout::uiMargin(), layout::uiHeight(40),
+                          0xFFFF, layout::uiFontSize(1), true);
 }
 
 void desenharLogoUFRN() {
-  const int16_t largura = layout::uiWidth(layout::UI_REFERENCE_WIDTH);
-  const int16_t altura = layout::uiHeight(layout::UI_REFERENCE_HEIGHT);
-  if (!ihm::desenharImagemBMP("UFRN.BMP", 0, 0, largura, altura)) {
-    ihm::escreverTextoTela("UFRN", layout::uiMargin(), layout::uiHeight(70), 0xFFFF,
-                            layout::uiFontSize(1), true);
-  }
+  ihm::escreverTextoTela("UFRN", layout::uiMargin(), layout::uiHeight(70), 0xFFFF,
+                          layout::uiFontSize(1), false);
 }
 
 void desenharTelaDesenvolvedor() {
@@ -1672,31 +1661,16 @@ void atualizarBoot() {
         ihm::executarDiagnosticoVisual();
         etapaBootDesenhada = true;
       }
-      if (decorrido >= DISPLAY_DIAGNOSTIC_DURATION_MS) avancarBoot(EtapaBoot::LogoMonkeyTech);
+      if (decorrido >= DISPLAY_DIAGNOSTIC_DURATION_MS) avancarBoot(EtapaBoot::Logos);
       break;
 
-    case EtapaBoot::LogoMonkeyTech:
+    case EtapaBoot::Logos:
       if (!etapaBootDesenhada) {
         desenharLogoMonkeyTech();
-        etapaBootDesenhada = true;
-      }
-      // Cada logo é uma etapa própria (antes os dois textos ficavam juntos
-      // na mesma tela) — o BMP lido do SD é maior/mais lento de desenhar
-      // que o texto, então a duração já folgada garante tempo de sobra
-      // depois do desenho, mesmo se o desenho demorar.
-      if (decorrido >= 1500) avancarBoot(EtapaBoot::LogoUFRN);
-      break;
-
-    case EtapaBoot::LogoUFRN:
-      if (!etapaBootDesenhada) {
         desenharLogoUFRN();
         etapaBootDesenhada = true;
       }
-      // UFRN.bmp (ver docs/VALIDACAO_GERAL.md) pode ser um arquivo bem
-      // maior que a tela — o redimensionamento por leitura em blocos do
-      // SD pode levar até alguns segundos; duração maior aqui evita que
-      // o logotipo mal apareça antes de avançar.
-      if (decorrido >= 2500) avancarBoot(EtapaBoot::LedVermelho);
+      if (decorrido >= 1500) avancarBoot(EtapaBoot::LedVermelho);
       break;
 
     case EtapaBoot::LedVermelho:
@@ -1747,9 +1721,6 @@ void atualizarBoot() {
 
     case EtapaBoot::Concluido:
       Serial.println("[STARTUP] Abrindo menu principal");
-      // Confirmação sonora de que a inicialização terminou e o
-      // equipamento está pronto (silenciosa se volume==0).
-      ihm::beep(200);
       estado.telaAtual = Tela::MenuPrincipal;
       estado.telaAnterior = Tela::MenuPrincipal;
       estado.indiceSelecionado = 0;
@@ -1762,7 +1733,7 @@ void atualizarBoot() {
 
 void init() {
   estado.telaAtual = Tela::Boot;
-  etapaBootAtual = ENABLE_DISPLAY_STARTUP_TEST ? EtapaBoot::DiagnosticoDisplay : EtapaBoot::LogoMonkeyTech;
+  etapaBootAtual = ENABLE_DISPLAY_STARTUP_TEST ? EtapaBoot::DiagnosticoDisplay : EtapaBoot::Logos;
   inicioEtapaBootMs = millis();
   etapaBootDesenhada = false;
   Serial.printf("[STARTUP] Estado: %s\n", nomeEtapaBoot(etapaBootAtual));

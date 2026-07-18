@@ -2,7 +2,6 @@
 #include <Adafruit_NeoPixel.h>
 #include <Arduino_GFX_Library.h>
 #include <cstdio>
-#include <cstdlib>
 #include <cstring>
 
 #include "MAIN.HPP"
@@ -150,18 +149,6 @@ void truncarTexto(char* destino, size_t tamanhoDestino, const char* origem,
   std::strncpy(destino, origem, maxCaracteres - 3);
   destino[maxCaracteres - 3] = '\0';
   std::strcat(destino, "...");
-}
-
-// BMP grava campos numéricos em little-endian, independente da endianness
-// da CPU — não usar memcpy/reinterpret_cast direto no buffer.
-uint16_t leEndianCurto(const uint8_t* buffer, size_t offset) {
-  return static_cast<uint16_t>(buffer[offset]) | (static_cast<uint16_t>(buffer[offset + 1]) << 8);
-}
-
-int32_t leEndianLongo(const uint8_t* buffer, size_t offset) {
-  return static_cast<int32_t>(
-      static_cast<uint32_t>(buffer[offset]) | (static_cast<uint32_t>(buffer[offset + 1]) << 8) |
-      (static_cast<uint32_t>(buffer[offset + 2]) << 16) | (static_cast<uint32_t>(buffer[offset + 3]) << 24));
 }
 
 }  // namespace
@@ -680,117 +667,6 @@ void desenharMensagem(const char* titulo, const char* mensagem) {
   display->setTextColor(COR_VALOR);
   display->setCursor(layout::uiMargin(), layout::uiCenterY());
   display->print(buffer);
-}
-
-bool desenharImagemBMP(const char* nomeComExtensao, int16_t x, int16_t y, int16_t larguraMaxima,
-                       int16_t alturaMaxima) {
-  if (!displayOk) return false;
-  if (larguraMaxima <= 0 || alturaMaxima <= 0) return false;
-
-  if (!armazenamento::abrirBinarioParaLeitura(nomeComExtensao)) {
-    Serial.printf("[IHM] BMP nao encontrado ou SD indisponivel: %s\n", nomeComExtensao);
-    return false;
-  }
-
-  uint8_t cabecalho[54];
-  if (armazenamento::lerBinario(cabecalho, sizeof(cabecalho)) != sizeof(cabecalho) ||
-      cabecalho[0] != 'B' || cabecalho[1] != 'M') {
-    Serial.printf("[IHM] BMP invalido ou cabecalho incompleto: %s\n", nomeComExtensao);
-    armazenamento::fecharBinario();
-    return false;
-  }
-
-  const uint32_t offsetDados = static_cast<uint32_t>(leEndianLongo(cabecalho, 10));
-  const int32_t larguraOrigem = leEndianLongo(cabecalho, 18);
-  const int32_t alturaBrutaOrigem = leEndianLongo(cabecalho, 22);
-  const uint16_t bpp = leEndianCurto(cabecalho, 28);
-  const uint32_t compressao = static_cast<uint32_t>(leEndianLongo(cabecalho, 30));
-
-  const bool origemTopoParaBase = (alturaBrutaOrigem < 0);
-  const int32_t alturaOrigem = origemTopoParaBase ? -alturaBrutaOrigem : alturaBrutaOrigem;
-
-  // Só BI_RGB (sem compressão) de 24 ou 32 bits — cobre o caso comum de
-  // exportação simples; qualquer outro formato cai no retrocesso do
-  // chamador (texto), sem tentar decodificar.
-  if (compressao != 0 || (bpp != 24 && bpp != 32) || larguraOrigem <= 0 || alturaOrigem <= 0) {
-    Serial.printf("[IHM] BMP formato nao suportado (%s): bpp=%u compressao=%u\n", nomeComExtensao,
-                  static_cast<unsigned>(bpp), static_cast<unsigned>(compressao));
-    armazenamento::fecharBinario();
-    return false;
-  }
-
-  const uint32_t bytesPorPixel = bpp / 8;
-  const uint32_t passoLinha = ((static_cast<uint32_t>(larguraOrigem) * bytesPorPixel + 3) / 4) * 4;
-
-  // Limite de sanidade: evita alocar um buffer de linha desproporcional
-  // (ex.: um BMP de altíssima resolução enviado por engano). Cobre
-  // confortavelmente imagens de até ~5000px de largura em 32 bits.
-  constexpr uint32_t LIMITE_BYTES_LINHA = 20000;
-  if (passoLinha > LIMITE_BYTES_LINHA) {
-    Serial.printf("[IHM] BMP linha grande demais (%s): %u bytes (limite %u)\n", nomeComExtensao,
-                  static_cast<unsigned>(passoLinha), static_cast<unsigned>(LIMITE_BYTES_LINHA));
-    armazenamento::fecharBinario();
-    return false;
-  }
-
-  // Escala uniforme (preserva proporção), só reduz — nunca amplia além do
-  // tamanho original da imagem.
-  float escala = 1.0f;
-  if (larguraOrigem > larguraMaxima) escala = static_cast<float>(larguraOrigem) / larguraMaxima;
-  if ((alturaOrigem / escala) > alturaMaxima) escala = static_cast<float>(alturaOrigem) / alturaMaxima;
-
-  const int16_t larguraSaida = static_cast<int16_t>(larguraOrigem / escala);
-  const int16_t alturaSaida = static_cast<int16_t>(alturaOrigem / escala);
-  const int16_t xCentralizado = x + (larguraMaxima - larguraSaida) / 2;
-  const int16_t yCentralizado = y + (alturaMaxima - alturaSaida) / 2;
-
-  uint8_t* linhaOrigem = static_cast<uint8_t*>(malloc(passoLinha));
-  uint16_t* linhaSaida = static_cast<uint16_t*>(malloc(static_cast<size_t>(larguraSaida) * sizeof(uint16_t)));
-  if (linhaOrigem == nullptr || linhaSaida == nullptr) {
-    Serial.println("[IHM] BMP: sem memoria para buffer de linha");
-    free(linhaOrigem);
-    free(linhaSaida);
-    armazenamento::fecharBinario();
-    return false;
-  }
-
-  Serial.printf("[IHM] Desenhando BMP %s (%ldx%ld -> %dx%d)\n", nomeComExtensao,
-                static_cast<long>(larguraOrigem), static_cast<long>(alturaOrigem), larguraSaida, alturaSaida);
-
-  for (int16_t linhaSaidaIdx = 0; linhaSaidaIdx < alturaSaida; linhaSaidaIdx++) {
-    const int32_t linhaOrigemIdx = static_cast<int32_t>(linhaSaidaIdx * escala);
-    // BMP padrão é bottom-up: a primeira linha do arquivo é a ÚLTIMA linha
-    // (mais embaixo) da imagem. BITMAPINFOHEADER com altura negativa é
-    // top-down (já na ordem de exibição).
-    const int32_t linhaArquivo =
-        origemTopoParaBase ? linhaOrigemIdx : (alturaOrigem - 1 - linhaOrigemIdx);
-    const uint32_t offsetLinha = offsetDados + static_cast<uint32_t>(linhaArquivo) * passoLinha;
-
-    if (!armazenamento::posicionarBinario(offsetLinha) ||
-        armazenamento::lerBinario(linhaOrigem, passoLinha) != passoLinha) {
-      Serial.println("[IHM] BMP: falha de leitura no meio do arquivo, interrompendo");
-      break;
-    }
-
-    for (int16_t colunaSaidaIdx = 0; colunaSaidaIdx < larguraSaida; colunaSaidaIdx++) {
-      const int32_t colunaOrigemIdx = static_cast<int32_t>(colunaSaidaIdx * escala);
-      const uint8_t* pixel = linhaOrigem + static_cast<uint32_t>(colunaOrigemIdx) * bytesPorPixel;
-      // BMP grava BGR(A); RGB565 = RRRRR GGGGGG BBBBB.
-      const uint8_t azul = pixel[0];
-      const uint8_t verde = pixel[1];
-      const uint8_t vermelho = pixel[2];
-      linhaSaida[colunaSaidaIdx] = static_cast<uint16_t>(((vermelho & 0xF8) << 8) |
-                                                          ((verde & 0xFC) << 3) | (azul >> 3));
-    }
-
-    TravaBarramentoDisplay travaBus;
-    display->draw16bitRGBBitmap(xCentralizado, yCentralizado + linhaSaidaIdx, linhaSaida, larguraSaida, 1);
-  }
-
-  free(linhaOrigem);
-  free(linhaSaida);
-  armazenamento::fecharBinario();
-  return true;
 }
 
 }  // namespace ihm

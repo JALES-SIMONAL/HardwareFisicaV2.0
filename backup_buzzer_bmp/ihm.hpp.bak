@@ -97,17 +97,4 @@ void desenharMensagem(const char* titulo, const char* mensagem);
 void desenharGradeModulos(const char* titulo, uint8_t dimensao,
                           bool (*modulo)(uint8_t x, uint8_t y));
 
-// ---------------------------------------------------------------------
-// Imagem BMP lida do microSD (logotipos de boot)
-// ---------------------------------------------------------------------
-
-// Lê "/<nomeComExtensao>" do microSD (via armazenamento::abrirBinarioParaLeitura)
-// e desenha, redimensionado por vizinho-mais-próximo (preserva proporção,
-// nunca amplia) para caber em até larguraMaxima x alturaMaxima, centralizado
-// em (x,y). Suporta BMP não comprimido de 24 ou 32 bits (BI_RGB); qualquer
-// outro formato, arquivo ausente ou cartão indisponível retorna false sem
-// desenhar nada — quem chama deve ter um retrocesso (ex.: texto) nesse caso.
-bool desenharImagemBMP(const char* nomeComExtensao, int16_t x, int16_t y, int16_t larguraMaxima,
-                        int16_t alturaMaxima);
-
 }

@@ -48,16 +48,6 @@ bool abrirParaLeitura(const char* nomeComExtensao);
 bool lerProximaLinha(char* destino, size_t tamanhoDestino);
 void fecharLeitura();
 
-// Leitura binária genérica (imagens BMP etc.) — usa um File separado de
-// abrirParaLeitura()/lerProximaLinha() (que são linha-a-linha, para CSV
-// texto), então os dois podem coexistir sem conflito. Nunca carrega o
-// arquivo inteiro na RAM: quem chama lê em blocos/linhas do tamanho que
-// precisar.
-bool abrirBinarioParaLeitura(const char* nomeComExtensao);
-size_t lerBinario(uint8_t* destino, size_t quantidadeBytes);
-bool posicionarBinario(uint32_t offset);
-void fecharBinario();
-
 uint64_t espacoTotalBytes();
 uint64_t espacoUsadoBytes();
 uint64_t espacoLivreBytes();

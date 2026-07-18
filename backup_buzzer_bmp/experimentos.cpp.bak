@@ -9,7 +9,6 @@
 #include "MAIN.HPP"
 #include "aquisicao.hpp"
 #include "armazenamento.hpp"
-#include "ihm.hpp"
 #include "mqtt_app.hpp"
 
 namespace experimentos {
@@ -47,12 +46,6 @@ void aoReceberEventoValido(uint8_t canal1based, bool novoEstado, int64_t tempoUs
            novoEstado ? 'H' : 'L', static_cast<long long>(tempoRelativoUs));
   armazenamento::enfileirarLinha(linha);
   mqtt_app::publicarEvento(canal1based, novoEstado ? 'H' : 'L', tempoRelativoUs);
-  // Bipe curto de confirmação por evento válido (Fase 10): silencioso se
-  // volume==0; curto de propósito para não atrapalhar eventos em sequência
-  // rápida. ihm::beep()/tone() não usa o barramento SPI compartilhado nem
-  // o canal PWM do backlight — seguro chamar daqui (núcleo 0/tarefa de
-  // aquisição), sem tocar em display ou microSD.
-  ihm::beep(20);
 
   portENTER_CRITICAL(&mux);
   eventosRepeticaoAtual++;

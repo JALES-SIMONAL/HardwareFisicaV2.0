@@ -31,11 +31,6 @@ uint16_t linhasNoBuffer = 0;
 File arquivoLeitura;
 bool leituraAberta = false;
 
-// File separado de arquivoLeitura: leitura binária genérica (imagens
-// BMP etc.), independente da leitura linha-a-linha usada para CSV.
-File arquivoBinario;
-bool binarioAberto = false;
-
 // abrirNovoArquivo()/fecharArquivoAtual() são chamadas pela IHM (núcleo 1,
 // em resposta ao usuário); processarFila() roda na tarefa de armazenamento
 // (núcleo 0). Este mutex protege arquivoAtual/arquivoAberto/buffer contra
@@ -269,38 +264,6 @@ void fecharLeitura() {
   TravaBarramentoSD travaBus;
   if (leituraAberta) arquivoLeitura.close();
   leituraAberta = false;
-}
-
-bool abrirBinarioParaLeitura(const char* nomeComExtensao) {
-  if (!cartaoOk) return false;
-
-  TravaBarramentoSD travaBus;
-  char caminho[32];
-  snprintf(caminho, sizeof(caminho), "/%s", nomeComExtensao);
-
-  arquivoBinario = SD.open(caminho, FILE_READ);
-  if (!arquivoBinario) return false;
-
-  binarioAberto = true;
-  return true;
-}
-
-size_t lerBinario(uint8_t* destino, size_t quantidadeBytes) {
-  if (!binarioAberto || destino == nullptr || quantidadeBytes == 0) return 0;
-  TravaBarramentoSD travaBus;
-  return arquivoBinario.read(destino, quantidadeBytes);
-}
-
-bool posicionarBinario(uint32_t offset) {
-  if (!binarioAberto) return false;
-  TravaBarramentoSD travaBus;
-  return arquivoBinario.seek(offset);
-}
-
-void fecharBinario() {
-  TravaBarramentoSD travaBus;
-  if (binarioAberto) arquivoBinario.close();
-  binarioAberto = false;
 }
 
 uint64_t espacoTotalBytes() {

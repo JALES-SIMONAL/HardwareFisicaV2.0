@@ -3,6 +3,201 @@
 Data da validação: 2026-07-18
 Ambiente: PlatformIO Core, `pio run` (sem upload), Windows.
 
+## ADENDO 6 — Buzzer mudo em pontos-chave + logotipos reais lidos do microSD
+
+Sétima rodada, mesma data. Backups em `backup_buzzer_bmp/` (`armazenamento.hpp/.cpp.bak`,
+`ihm.hpp/.cpp.bak`, `maquina_estados.hpp/.cpp.bak`, `experimentos.cpp.bak`, `MAIN.HPP.bak`).
+
+### 1. Buzzer "muito baixo" no boot e nos eventos de canal
+
+Investigação (busca textual por `beep(`/`tone(` em todo o projeto): o
+buzzer **nunca era acionado** nem na inicialização nem na detecção de
+eventos válidos de canal — só existiam bipes de erro/confirmação em telas
+específicas (nome inválido, colisão de nome, sem eventos, confirmar
+volume). "Volume muito baixo" nessas duas situações era, na prática,
+**silêncio total** (não um volume baixo de verdade).
+
+Também confirmado: o buzzer é passivo, acionado só por `tone()` — **não
+há controle analógico real de amplitude** sem um estágio de amplificação
+externo (já documentado no próprio código); o parâmetro "volume" (0-30)
+só liga/desliga o som (`0` = mudo, qualquer outro valor = mesmo volume
+físico). Não fingi um controle de volume que o hardware não tem —
+mudanças foram limitadas ao que é fisicamente possível: presença/ausência
+de som, frequência e duração.
+
+**Correções:**
+- `src/experimentos.cpp` — `aoReceberEventoValido()` agora chama
+  `ihm::beep(20)` (bipe curto, ~20 ms) a cada evento de canal válido
+  aceito durante um experimento em andamento, ao lado do enfileiramento
+  no CSV e da publicação MQTT já existentes. Curto de propósito, para não
+  atrapalhar canais com eventos em sequência rápida; silencioso se
+  volume==0. Chamado no núcleo 0 (tarefa de aquisição) — seguro, pois
+  `tone()` usa seu próprio canal LEDC interno, sem tocar no barramento SPI
+  compartilhado nem no canal de PWM do backlight.
+- `src/maquina_estados.cpp` — bipe de 200 ms quando a sequência de boot
+  termina e o menu principal abre (`EtapaBoot::Concluido`), como
+  confirmação sonora de "equipamento pronto". Não interfere com o
+  requisito original de "sem bipe durante o teste de LEDs/logotipos" —
+  o bipe acontece só depois de toda a sequência visual, na transição
+  final para o menu.
+- **Não alterada** a frequência do buzzer (`BUZZER_FREQUENCIA_HZ =
+  2000`, em `ihm.cpp`) — mudar isso sem testar no hardware real seria
+  apostar às cegas (pode tanto ajudar quanto piorar, dependendo da
+  ressonância do piezo físico usado). Deixado como uma única constante
+  fácil de ajustar depois de um teste físico, caso ainda soe fraco.
+
+### 2. Logotipos reais (Monkey Tech / UFRN) lidos do microSD
+
+Antes, a sequência de boot só desenhava texto ("Monkey Tech" / "UFRN")
+porque os bitmaps nunca tinham sido conectados ao firmware. Implementado
+um leitor de BMP genérico, lido diretamente do cartão (não embarcado em
+PROGMEM) — meio termo pedido explicitamente pelo usuário.
+
+- **`armazenamento.hpp`/`.cpp`** — nova API de leitura binária genérica
+  (`abrirBinarioParaLeitura`/`lerBinario`/`posicionarBinario`/
+  `fecharBinario`), com `File` próprio (separado do usado por
+  `abrirParaLeitura`/`lerProximaLinha`, que é linha-a-linha para CSV texto)
+  — mesma trava `TravaBarramentoSD` das demais funções.
+- **`ihm.hpp`/`.cpp`** — `desenharImagemBMP(nomeComExtensao, x, y,
+  larguraMaxima, alturaMaxima)`: lê o cabeçalho BMP (assinatura, offset
+  dos dados, largura/altura, bits por pixel, compressão), suporta 24 ou
+  32 bits **sem compressão** (BI_RGB — cobre exportação simples de
+  qualquer editor de imagem comum), linha a linha (nunca carrega a imagem
+  inteira na RAM — só uma linha do arquivo por vez, com buffer alocado
+  dinamicamente e liberado ao final), com redimensionamento por
+  vizinho-mais-próximo preservando proporção (só reduz, nunca amplia) e
+  centralização automática. Retorna `false` (sem desenhar nada) se o
+  cartão estiver indisponível, o arquivo não existir, ou o formato não
+  for suportado (compressão, bits por pixel diferentes de 24/32, ou linha
+  maior que um limite de sanidade de 20.000 bytes) — quem chama sempre
+  tem um retrocesso.
+- **`maquina_estados.cpp`** — a etapa de boot `Logos` virou duas etapas
+  próprias, `LogoMonkeyTech` e `LogoUFRN` (antes os dois textos ficavam
+  sobrepostos na mesma tela); cada uma tenta `ihm::desenharImagemBMP(...)`
+  primeiro e só cai no texto se o BMP não puder ser desenhado. Duração da
+  etapa UFRN aumentada (2500 ms) para dar folga ao redimensionamento (ver
+  abaixo).
+
+**Nomes de arquivo esperados na RAIZ do cartão microSD** (8.3, maiúsculas,
+por segurança de compatibilidade com o driver FAT do ESP32):
+
+```
+/MONKEY.BMP   (equivalente a docs/Monkey Tech.bmp deste repositório)
+/UFRN.BMP     (equivalente a docs/UFRN.bmp deste repositório)
+```
+
+**Atenção — inspecionei os dois arquivos atuais em `docs/`:**
+
+| Arquivo | Dimensões | Bits/pixel | Observação |
+| --- | --- | --- | --- |
+| `Monkey Tech.bmp` | 160×128 | 24 | Já bate exatamente com a resolução do display rotacionado — desenha 1:1, sem redimensionar, rápido. |
+| `UFRN.bmp` | 3500×1120 | 32 | ~137× mais pixels que a tela. O firmware **consegue** carregar e reduzir (redimensiona para ~160×51, centralizado), mas isso significa ler ~51 linhas de 14 KB cada do cartão (~700 KB) por SPI de software — pode levar de 1 a poucos segundos, perceptível no boot. |
+
+**Recomendação (não aplicada automaticamente — mexer nos arquivos de
+imagem foge do escopo de firmware):** redimensionar `UFRN.bmp` para algo
+próximo de 160×128 antes de copiar para o cartão, num editor de imagem
+qualquer, para um boot mais rápido e nítido. O firmware funciona do jeito
+que está, só não é o ideal em velocidade com o arquivo no tamanho atual.
+
+### Compilação
+
+`pio run` — ambos os ambientes `SUCCESS`, sem erros nem warnings. RAM
+14,7% (48.272/327.680 B), Flash ~70,4–70,5% (922.405–924.661/1.310.720 B).
+
+**Ainda não verificado fisicamente:** nem o som do buzzer nem os
+logotipos foram vistos/ouvidos em hardware real nesta sessão (sem
+upload, por escopo). Também não copiei nenhum arquivo `.bmp` para dentro
+de um cartão SD real — isso exige acesso físico ao cartão, fora do que
+este ambiente permite.
+
+---
+
+## ADENDO 5 — Confirmação: display+SD simultâneos; correção de navegação; auditoria de NVS
+
+Sexta rodada, mesma data. Usuário confirmou display e LEDs funcionando
+fisicamente após o Adendo 4. Sem backup novo (mudanças cirúrgicas na
+mesma área já coberta por `backup_display_fix/` e `backup_menu_leds/`).
+
+### 1. Display + microSD simultâneos, mesmo barramento
+
+Revisei os 8 pontos de desenho em `ihm.cpp` e as 13 funções que tocam o
+cartão em `armazenamento.cpp`: todos passam por `TravaBarramentoDisplay`/
+`TravaBarramentoSD` respectivamente (mesmo mutex, `mutexBarramentoSPI`),
+sem nenhum acesso direto ao `display->`/`SD.*` fora de uma trava. Ordem de
+lock consistente (barramento por fora, `mutexArquivo` por dentro) — sem
+risco de deadlock entre os dois núcleos. `desenharCabecalhoRodape()`
+(chamada só internamente pelas 8 funções já travadas) não tem trava
+própria de propósito, para não travar em si mesma. A implementação do
+Adendo 4 já cobre "funcionar em conjunto ao mesmo tempo": cada lado
+reconfigura os pinos para si mesmo a cada uso, protegido pelo mutex —
+nenhuma alteração adicional foi necessária aqui, só confirmação.
+
+### 2. Auditoria de "Voltar" — BUG REAL ENCONTRADO E CORRIGIDO
+
+Revisão de toda `maquina_estados.cpp`: confirmado que o encoder local
+(`tick()`) só gera `CommandType::Next/Previous/Confirm` — **nunca**
+`CommandType::Back` (só chega via MQTT). Todas as telas de lista
+("Voltar" como último item) e diálogos Sim/Não já funcionavam
+corretamente. Porém **3 telas dependiam exclusivamente de `Back` para
+cancelar, sem nenhum "Voltar" alcançável pelo encoder local**:
+`ExperimentoRepeticoes`, `AnaliseSelecionarRepeticao` e
+`AnaliseDistancia` — usuário só com encoder+KEY não conseguia sair delas
+sem completar a ação (iniciar experimento / carregar repetição / calcular
+velocidade); no caso de `AnaliseSelecionarRepeticao`, uma repetição sem
+eventos deixava o usuário **preso na tela permanentemente**.
+
+**Correção:** as 3 telas agora usam o mesmo padrão seletor "Valor /
+Voltar" já usado por Brilho/Volume (item 0 = valor atual, clicar entra em
+edição; item 1 = Voltar, sempre alcançável antes de editar):
+
+- `redesenharValorComVoltar()` generalizada para aceitar mínimo/máximo/
+  unidade (antes, fixo em `configuracoes::NIVEL_MINIMO/MAXIMO`) e
+  reaproveitada pelas 5 telas.
+- Nova função `tratarSeletorValorComVoltar()` (Next/Previous alternam
+  entre os 2 itens; Confirm no item 0 entra em edição; Confirm no item 1
+  ou `Back` chama `voltarUmNivel()`).
+- `tratarExperimentoRepeticoes`, `tratarAnaliseSelecionarRepeticao`,
+  `tratarAnaliseDistancia` agora chamam esse seletor quando
+  `!edicaoValor.emEdicao`, e passam a tratar `Back` durante a edição como
+  "sair da edição, voltar ao seletor" (mesmo padrão de Brilho/Volume) em
+  vez de silenciosamente não fazer nada.
+- Em `AnaliseSelecionarRepeticao`, quando a repetição escolhida não tem
+  eventos, a tela agora volta ao seletor automaticamente (antes, ficava
+  presa em edição para sempre).
+
+**Custo aceito:** essas 3 telas agora exigem um clique extra (selecionar
+"Valor" antes de editar) — mesmo comportamento que Brilho/Volume já
+tinham. Troca deliberada: sem isso, não há como oferecer "Voltar" com
+apenas encoder + botão KEY (não há um terceiro gesto local disponível).
+
+### 3. Auditoria de persistência NVS das configurações de canais
+
+Revisão de `canais.cpp`: `salvarCanal()` chama `Preferences::putUChar()`,
+que no núcleo Arduino-ESP32 grava e **commita imediatamente** na flash
+(NVS) — não depende de `prefs.end()` nem de um commit manual. Confirmado
+por leitura: **todo** caminho de mutação (`definirModo`/`definirTodos`/
+`restaurarPadrao`), tanto local (IHM) quanto remoto (comandos MQTT
+`SetChannelMode`/`SetAllChannelsMode`/`RestoreChannelDefaults`, em
+`maquina_estados.cpp`), passa pelas MESMAS 3 funções de `canais.cpp` —
+nenhum caminho alternativo grava sem persistir. Nenhuma chamada de
+`prefs.clear()`/`nvs_flash_erase()`/similar existe no projeto (busca
+textual confirmada) que pudesse apagar os valores salvos. O versionamento
+de esquema (`"ver"`) já lida corretamente com NVS vazia/incompatível na
+primeira inicialização, aplicando e persistindo o padrão (`Both`).
+**Nenhum bug de código encontrado** — a lógica de persistência está
+correta; a garantia final de que sobrevive fisicamente a um
+desligamento/religamento depende do hardware de flash do ESP32 (NVS é
+projetada para ser resiliente a perda de energia), não é algo que a
+leitura de código sozinha possa certificar 100%.
+
+### Compilação
+
+`pio run` — ambos os ambientes `SUCCESS`, sem erros nem warnings. RAM
+14,7% (48.240–48.248/327.680 B), Flash ~70,2–70,4%
+(920.193–922.421/1.310.720 B).
+
+---
+
 ## ADENDO 4 — CAUSA RAIZ REAL encontrada e corrigida: barramento SPI compartilhado TFT/SD
 
 Quinta rodada, mesma data. Sem backup novo (mudança cirúrgica, mesmos

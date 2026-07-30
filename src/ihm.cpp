@@ -14,8 +14,15 @@ namespace ihm {
 
 namespace {
 
-constexpr int16_t TFT_LARGURA = 128;
-constexpr int16_t TFT_ALTURA = 160;
+// Dimensões NATIVAS (pré-rotação) do painel — usadas só para construir os
+// objetos ST7735/Canvas abaixo. NUNCA usar estas duas constantes para
+// limpar/desenhar: o painel opera rotacionado (paisagem), então a
+// largura/altura realmente visíveis são display->width()/display->height()
+// (já refletem a rotação) — ver bug corrigido em limparFaixa()/
+// escreverTelaApp() (uma faixa à direita não era apagada porque essas
+// funções limpavam só TFT_LARGURA_NATIVA px, menos que a largura real).
+constexpr int16_t TFT_LARGURA_NATIVA = 128;
+constexpr int16_t TFT_ALTURA_NATIVA = 160;
 constexpr uint16_t COR_FUNDO = 0x0000;
 constexpr uint16_t COR_CABECALHO = 0x07E0;
 constexpr uint16_t COR_TITULO = 0xFFFF;
@@ -110,16 +117,25 @@ class TravaBarramentoDisplay {
 Adafruit_NeoPixel pixels(NUM_LEDS, PIN_NEO, NEO_GRB + NEO_KHZ800);
 Arduino_DataBus* bus = new Arduino_SWSPI(TFT_DC, TFT_CS, TFT_SCLK, TFT_MOSI,
 										 TFT_MISO);
-Arduino_GFX* displayFisico = new Arduino_ST7735(bus, TFT_RST, 1, false, TFT_LARGURA,
-										 TFT_ALTURA, 0, 0, 0, 0);
-// display aponta para um canvas em RAM (framebuffer 128x160), não direto
-// para o TFT: todo fillScreen()/fillRect()/print() das funções abaixo
-// escreve só na RAM — nada muda na tela física até display->flush() ser
-// chamado, sempre como último passo de cada função desenharX()/
-// escreverX(). Sem isso, cada redesenho ia direto para o SPI bit-bang
-// (lento) e a tela ficava visivelmente preta entre o fillScreen() e o
-// desenho seguinte, causando a sensação de "piscado" a cada atualização.
-Arduino_GFX* display = new Arduino_Canvas(TFT_LARGURA, TFT_ALTURA, displayFisico);
+Arduino_GFX* displayFisico = new Arduino_ST7735(bus, TFT_RST, 1, false, TFT_LARGURA_NATIVA,
+										 TFT_ALTURA_NATIVA, 0, 0, 0, 0);
+// display aponta para um canvas em RAM (framebuffer), não direto para o
+// TFT: todo fillScreen()/fillRect()/print() das funções abaixo escreve só
+// na RAM — nada muda na tela física até display->flush() ser chamado,
+// sempre como último passo de cada função desenharX()/escreverX(). Sem
+// isso, cada redesenho ia direto para o SPI bit-bang (lento) e a tela
+// ficava visivelmente preta entre o fillScreen() e o desenho seguinte,
+// causando a sensação de "piscado" a cada atualização.
+//
+// IMPORTANTE: o canvas é criado com as dimensões JÁ ROTACIONADAS (largura x
+// altura trocadas em relação ao painel nativo), não TFT_LARGURA_NATIVA x
+// TFT_ALTURA_NATIVA — displayFisico acima já tem rotação 1 (paisagem)
+// aplicada, então seu width()/height() reais são 160x128, não 128x160. Um
+// canvas criado com as dimensões nativas (erro anterior) tem framebuffer
+// menor que a área física visível: display->flush() manda um bitmap
+// 128x160 para um painel de 160x128, deixando uma faixa de ~32px à direita
+// nunca escrita/limpa (o bug de "faixa não apaga no lado direito").
+Arduino_GFX* display = new Arduino_Canvas(TFT_ALTURA_NATIVA, TFT_LARGURA_NATIVA, displayFisico);
 
 bool textoMudou(const char* atual, const char* novoTexto) {
   if (atual == nullptr && novoTexto == nullptr) {
@@ -134,7 +150,10 @@ bool textoMudou(const char* atual, const char* novoTexto) {
 }
 
 void limparFaixa(int16_t y, int16_t altura) {
-  display->fillRect(0, y, TFT_LARGURA, altura, COR_FUNDO);
+  // display->width() (não TFT_LARGURA_NATIVA): o painel é usado rotacionado
+  // (paisagem) e a largura nativa é menor que a largura real visível —
+  // limpar só a largura nativa deixava uma faixa à direita sem apagar.
+  display->fillRect(0, y, display->width(), altura, COR_FUNDO);
 }
 
 void desenharTextoFaixa(int16_t y, uint8_t tamanho, uint16_t cor,
@@ -315,8 +334,8 @@ void escreverTelaApp(const char* titulo, const char* valor, const char* rodape,
   if (forcarRedesenho || !telaApp.inicializada) {
     Serial.println("[IHM] Limpando tela em escreverTelaApp()");
     display->fillScreen(COR_FUNDO);
-    display->fillRect(0, 0, TFT_LARGURA, 28, COR_CABECALHO);
-    display->drawRect(0, 0, TFT_LARGURA, TFT_ALTURA, COR_CABECALHO);
+    display->fillRect(0, 0, display->width(), 28, COR_CABECALHO);
+    display->drawRect(0, 0, display->width(), display->height(), COR_CABECALHO);
     telaApp.inicializada = true;
     telaApp.titulo[0] = '\0';
     telaApp.valor[0] = '\0';
@@ -327,7 +346,7 @@ void escreverTelaApp(const char* titulo, const char* valor, const char* rodape,
     std::strncpy(telaApp.titulo, titulo, sizeof(telaApp.titulo) - 1);
     telaApp.titulo[sizeof(telaApp.titulo) - 1] = '\0';
 
-    display->fillRect(0, 0, TFT_LARGURA, 28, COR_CABECALHO);
+    display->fillRect(0, 0, display->width(), 28, COR_CABECALHO);
     display->setCursor(10, 8);
     display->setTextSize(1);
     display->setTextColor(COR_TITULO);

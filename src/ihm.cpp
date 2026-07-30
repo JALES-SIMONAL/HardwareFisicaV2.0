@@ -110,8 +110,16 @@ class TravaBarramentoDisplay {
 Adafruit_NeoPixel pixels(NUM_LEDS, PIN_NEO, NEO_GRB + NEO_KHZ800);
 Arduino_DataBus* bus = new Arduino_SWSPI(TFT_DC, TFT_CS, TFT_SCLK, TFT_MOSI,
 										 TFT_MISO);
-Arduino_GFX* display = new Arduino_ST7735(bus, TFT_RST, 1, false, TFT_LARGURA,
+Arduino_GFX* displayFisico = new Arduino_ST7735(bus, TFT_RST, 1, false, TFT_LARGURA,
 										 TFT_ALTURA, 0, 0, 0, 0);
+// display aponta para um canvas em RAM (framebuffer 128x160), não direto
+// para o TFT: todo fillScreen()/fillRect()/print() das funções abaixo
+// escreve só na RAM — nada muda na tela física até display->flush() ser
+// chamado, sempre como último passo de cada função desenharX()/
+// escreverX(). Sem isso, cada redesenho ia direto para o SPI bit-bang
+// (lento) e a tela ficava visivelmente preta entre o fillScreen() e o
+// desenho seguinte, causando a sensação de "piscado" a cada atualização.
+Arduino_GFX* display = new Arduino_Canvas(TFT_LARGURA, TFT_ALTURA, displayFisico);
 
 bool textoMudou(const char* atual, const char* novoTexto) {
   if (atual == nullptr && novoTexto == nullptr) {
@@ -223,6 +231,7 @@ void init() {
                   static_cast<unsigned>(ESP.getFreeHeap()));
 
     display->fillScreen(COR_FUNDO);
+    display->flush();
     layout::init(display->width(), display->height());
   }
 
@@ -338,6 +347,8 @@ void escreverTelaApp(const char* titulo, const char* valor, const char* rodape,
 
     desenharTextoFaixa(112, 1, COR_RODAPE, telaApp.rodape);
   }
+
+  display->flush();
 }
 
 void escreverTextoTela(const char* texto, int16_t x, int16_t y, uint16_t cor,
@@ -354,6 +365,7 @@ void escreverTextoTela(const char* texto, int16_t x, int16_t y, uint16_t cor,
   display->setTextSize(tamanho);
   display->setCursor(x, y);
   display->print(texto);
+  display->flush();
 }
 
 EventoEncoder lerEventoEncoder() {
@@ -502,6 +514,8 @@ void desenharListaMenu(const char* titulo, const char* const* itens, uint8_t qua
     display->setCursor(layout::uiMargin(), y);
     display->print(buffer);
   }
+
+  display->flush();
 }
 
 void desenharConfirmacao(const char* pergunta, uint8_t indiceSelecionado) {
@@ -536,6 +550,8 @@ void desenharConfirmacao(const char* pergunta, uint8_t indiceSelecionado) {
     display->setCursor(layout::uiMargin(), y);
     display->print(opcoes[i]);
   }
+
+  display->flush();
 }
 
 void desenharValorEditavel(const char* titulo, int32_t valor, int32_t minimo,
@@ -575,6 +591,8 @@ void desenharValorEditavel(const char* titulo, int32_t valor, int32_t minimo,
   if (preenchido > 0) {
     display->fillRect(barraX + 1, barraY + 1, preenchido, barraAltura - 2, COR_CABECALHO);
   }
+
+  display->flush();
 }
 
 void desenharListaRolavel(const char* titulo, const char* const* linhas,
@@ -604,6 +622,8 @@ void desenharListaRolavel(const char* titulo, const char* const* linhas,
     display->setCursor(layout::uiMargin(), yInicial + linha * alturaLinha);
     display->print(buffer);
   }
+
+  display->flush();
 }
 
 void desenharGradeModulos(const char* titulo, uint8_t dimensao,
@@ -615,14 +635,20 @@ void desenharGradeModulos(const char* titulo, uint8_t dimensao,
   display->fillScreen(COR_FUNDO);
   desenharCabecalhoRodape(titulo);
 
-  if (dimensao == 0 || modulo == nullptr) return;
+  if (dimensao == 0 || modulo == nullptr) {
+    display->flush();
+    return;
+  }
 
   const int16_t areaLargura = display->width();
   const int16_t areaAltura = display->height() - layout::uiHeaderHeight() - layout::uiFooterHeight();
   const int16_t ladoDisponivel = (areaLargura < areaAltura) ? areaLargura : areaAltura;
 
   const int16_t tamanhoCelula = ladoDisponivel / dimensao;
-  if (tamanhoCelula <= 0) return;
+  if (tamanhoCelula <= 0) {
+    display->flush();
+    return;
+  }
 
   const int16_t ladoGrade = tamanhoCelula * dimensao;
   const int16_t offsetX = (areaLargura - ladoGrade) / 2;
@@ -637,6 +663,8 @@ void desenharGradeModulos(const char* titulo, uint8_t dimensao,
       }
     }
   }
+
+  display->flush();
 }
 
 void desenharMensagem(const char* titulo, const char* mensagem) {
@@ -655,6 +683,7 @@ void desenharMensagem(const char* titulo, const char* mensagem) {
   display->setTextColor(COR_VALOR);
   display->setCursor(layout::uiMargin(), layout::uiCenterY());
   display->print(buffer);
+  display->flush();
 }
 
 bool desenharImagemBMP(const char* nomeComExtensao, int16_t x, int16_t y, int16_t larguraMaxima,
@@ -778,6 +807,7 @@ bool desenharImagemBMP(const char* nomeComExtensao, int16_t x, int16_t y, int16_
     Serial.printf("[IHM] Desenhando BMP %s (leitura completa)\n", nomeComExtensao);
     TravaBarramentoDisplay travaBus;
     display->draw16bitRGBBitmap(xCentralizado, yCentralizado, framebuffer, larguraSaida, alturaSaida);
+    display->flush();
   }
 
   free(framebuffer);

@@ -8,7 +8,7 @@ void init();
 
 // true se display->begin() teve sucesso na inicialização. Quando false,
 // todas as funções de desenho abaixo viram no-op (não chamam o ponteiro do
-// display) — o restante do firmware (encoder, LEDs, sensores, MQTT, SD)
+// display) — o restante do firmware (encoder, LEDs, sensores, Bluetooth, SD)
 // continua funcionando normalmente.
 bool displayDisponivel();
 
@@ -23,11 +23,6 @@ void controlarLED(uint16_t indice, uint8_t vermelho, uint8_t verde, uint8_t azul
 // de simultaneamente). Use esta função sempre que todos os LEDs devem
 // acender juntos (teste inicial, indicação de erro geral etc.).
 void controlarTodosLeds(uint8_t vermelho, uint8_t verde, uint8_t azul, uint8_t brilho = 55);
-
-// Sequência de diagnóstico visual (vermelho/verde/azul/preto + texto),
-// usada como uma etapa temporizada da sequência de boot (ver
-// maquina_estados::EtapaBoot). Só desenha algo se displayDisponivel().
-void executarDiagnosticoVisual();
 
 void escreverTelaApp(const char* titulo, const char* valor,
 					 const char* rodape = nullptr,

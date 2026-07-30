@@ -11,8 +11,8 @@
 #include "configuracoes.hpp"
 #include "experimentos.hpp"
 #include "ihm.hpp"
+#include "bluetooth_app.hpp"
 #include "maquina_estados.hpp"
-#include "mqtt_app.hpp"
 
 namespace {
 
@@ -36,7 +36,8 @@ void tarefaAquisicaoArmazenamento(void* /*parametro*/) {
 // main.cpp fica pequeno: só inicializa os módulos, cria a tarefa do núcleo
 // 0 e entra no laço da máquina de estados. O laço padrão do Arduino-ESP32
 // (loop()) já roda como "loopTask" pinada ao núcleo 1 (APP_CPU) — é, na
-// prática, a tarefa de IHM/MQTT descrita no plano, sem precisar recriá-la.
+// prática, a tarefa de IHM/Bluetooth descrita no plano, sem precisar
+// recriá-la.
 void setup() {
   Serial.begin(SERIAL_BAUD_RATE);
   delay(300);
@@ -76,9 +77,9 @@ void setup() {
 
   experimentos::init();
 
-  Serial.println("[BOOT] Iniciando MQTT");
-  mqtt_app::init();  // Wi-Fi/MQTT: assíncrono, não bloqueia o restante
-  Serial.println("[BOOT] MQTT configurado");
+  Serial.println("[BOOT] Iniciando Bluetooth");
+  bluetooth_app::init();  // BLE (NimBLE): assíncrono, não bloqueia o restante
+  Serial.println("[BOOT] Bluetooth configurado");
 
   Serial.println("[BOOT] Iniciando maquina de estados");
   maquina_estados::init();

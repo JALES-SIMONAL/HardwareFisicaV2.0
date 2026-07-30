@@ -4,8 +4,8 @@
 
 // Máquina de estados explícita: dono único da navegação entre telas,
 // transições, confirmações e cancelamentos. Comandos locais (encoder/tecla)
-// e remotos (MQTT) chegam aqui pela mesma função — não existe lógica de
-// funcionamento separada para o aplicativo.
+// e remotos (Bluetooth) chegam aqui pela mesma função — não existe lógica
+// de funcionamento separada para o aplicativo.
 namespace maquina_estados {
 
 enum class Tela : uint8_t {
@@ -55,7 +55,7 @@ void init();
 // (quando aplicável), lê encoder/tecla local e redesenha só quando algo mudou.
 void tick();
 
-// Ponto de entrada único para comandos locais e remotos (MQTT).
+// Ponto de entrada único para comandos locais e remotos (Bluetooth).
 void processarComando(const comandos::Command& cmd, comandos::Origem origem);
 
 Tela telaAtual();

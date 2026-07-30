@@ -91,12 +91,6 @@ constexpr uint32_t SENSOR_DEBOUNCE_US = 1000;
 // display físico está de fato recebendo dados e que o backlight está
 // aceso antes de investigar problemas de hardware).
 // ---------------------------------------------------------------------
-// Quando true, logo após display->begin() ter sucesso, roda uma sequência
-// rápida vermelho/verde/azul/preto + texto, dentro do firmware completo
-// (não é um sketch separado), só para confirmar visualmente o objeto real
-// usado pela IHM. Não bloqueia a sequência inicial normal.
-constexpr bool ENABLE_DISPLAY_STARTUP_TEST = true;
-
 // Quando true, força o duty do PWM do backlight para o máximo em tempo de
 // execução (só no valor aplicado ao ledcWrite), mesmo que o brilho salvo
 // na NVS seja baixo/zero — só para diagnóstico. Não altera nem grava o
@@ -115,13 +109,6 @@ constexpr bool FORCE_DISPLAY_BACKLIGHT_DIAGNOSTIC = true;
 // instante (reduz flicker); não é usado para paginar a leitura do encoder
 // em si, só para agrupar redesenhos muito próximos no tempo.
 constexpr uint32_t UI_UPDATE_INTERVAL_MS = 16;
-
-// Duração total (ms) da etapa de diagnóstico visual do display (vermelho/
-// verde/azul/"Display OK") dentro da sequência de boot — é uma etapa da
-// própria máquina de estados (maquina_estados::EtapaBoot), controlada por
-// millis(), não uma espera separada em ihm::init(). Depois desse tempo, o
-// boot avança automaticamente para o logotipo.
-constexpr uint32_t DISPLAY_DIAGNOSTIC_DURATION_MS = 1500;
 
 // Brilho (0-255) dos NeoPixel durante os testes de diagnóstico (teste
 // visual do display e teste inicial dos 6 LEDs), independente do brilho

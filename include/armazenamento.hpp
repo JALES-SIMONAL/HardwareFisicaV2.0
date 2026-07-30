@@ -83,7 +83,29 @@ uint32_t contadorErros();
 // operação, (4) liberar o mutex. Sem isso, o primeiro acesso ao SD depois
 // do TFT (ou vice-versa) deixa o outro periférico sem resposta física no
 // barramento, mesmo que o código pareça correto.
+//
+// IMPORTANTE: a reconfiguração física (passo 2) só deve acontecer quando o
+// "dono" do barramento realmente MUDA (SD -> Display ou Display -> SD).
+// Repetir SPI.begin()/pinMode() a cada acesso — inclusive entre acessos
+// consecutivos do MESMO lado, como uma linha de BMP após a outra — chegou
+// a reinicializar o periférico de SPI dezenas de vezes por segundo, o que
+// na prática corrompeu o estado interno do cartão (falhas repetidas de
+// CMD13/SEND_STATUS observadas ao ler um BMP linha a linha). Por isso
+// marcarDonoDisplay()/donoAtualEhDisplay() existem: quem reconfigura o
+// lado do display (ihm.cpp) consulta e atualiza o dono atual em vez de
+// reconfigurar incondicionalmente a cada chamada; o lado do SD
+// (armazenamento.cpp, em TravaBarramentoSD) faz o mesmo internamente.
 void travarBarramentoSPI();
 void destravarBarramentoSPI();
+
+// true se o último lado a reconfigurar fisicamente o barramento foi o
+// display. Usada por ihm.cpp para só chamar pinMode() quando o dono está
+// de fato mudando de SD para Display.
+bool donoAtualEhDisplay();
+
+// Chamada por ihm.cpp IMEDIATAMENTE APÓS reconfigurar os pinos para o TFT
+// (pinMode), com o mutex já tomado — registra que o display passou a ser o
+// dono do barramento físico.
+void marcarDonoDisplay();
 
 }  // namespace armazenamento

@@ -6,7 +6,7 @@
 
 // Única fonte de verdade da configuração dos canais de sensores (modo de
 // borda considerado válido para registro). Usada pela IHM local, pelo
-// filtro de aquisição e pelo MQTT — sempre pelas mesmas funções.
+// filtro de aquisição e pelo Bluetooth — sempre pelas mesmas funções.
 namespace canais {
 
 using comandos::EdgeMode;

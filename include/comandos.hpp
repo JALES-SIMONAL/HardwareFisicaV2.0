@@ -3,9 +3,9 @@
 #include <stdint.h>
 
 // Vocabulário de comandos compartilhado entre a entrada local (encoder/tecla
-// KEY) e a entrada remota (MQTT). Ambas as origens convertem sua entrada
-// para o mesmo Command e chamam a mesma função da máquina de estados —
-// não existe lógica de funcionamento separada para o aplicativo.
+// KEY) e a entrada remota (Bluetooth). Ambas as origens convertem sua
+// entrada para o mesmo Command e chamam a mesma função da máquina de
+// estados — não existe lógica de funcionamento separada para o aplicativo.
 namespace comandos {
 
 // Modo de borda considerado válido para registro de um canal de sensor.
@@ -38,7 +38,7 @@ enum class CommandType : uint8_t {
   Reconnect
 };
 
-enum class Origem : uint8_t { Local, MQTT };
+enum class Origem : uint8_t { Local, Bluetooth };
 
 // Estrutura mínima e genérica: cada CommandType usa só os campos relevantes.
 struct Command {

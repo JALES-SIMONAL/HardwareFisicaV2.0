@@ -68,25 +68,41 @@ uint8_t volumeAtual = BRILHO_NIVEL_MAXIMO;
 // true somente se display->begin() teve sucesso. Quando false, todas as
 // funções de desenho abaixo retornam sem tocar no ponteiro do display —
 // evita acesso a um periférico que não respondeu, sem travar o restante
-// do firmware (encoder, LEDs, sensores, MQTT, SD continuam ativos).
+// do firmware (encoder, LEDs, sensores, Bluetooth, SD continuam ativos).
 bool displayOk = false;
 
-// RAII: toma o mutex do barramento SPI compartilhado (armazenamento.hpp) e
-// reconfigura MOSI/SCK/MISO como GPIO simples — necessário porque o
-// microSD usa o periférico de SPI de HARDWARE do ESP32 nos MESMOS pinos
-// físicos (só o CS muda) e pode tê-los roteado para si desde o último
-// acesso ao cartão. Sem isto, o TFT (Arduino_SWSPI, bit-bang via
-// digitalWrite()) simplesmente para de responder fisicamente depois do
-// primeiro SD.begin()/leitura/escrita — mesmo com o código de desenho
-// certo — porque o pino deixa de obedecer digitalWrite() enquanto restar
-// roteado para o periférico de SPI.
+// RAII: toma o mutex do barramento SPI compartilhado (armazenamento.hpp) e,
+// só se o dono estiver de fato mudando (do SD para o display), reconfigura
+// MOSI/SCK/MISO como GPIO simples — necessário porque o microSD usa o
+// periférico de SPI de HARDWARE do ESP32 nos MESMOS pinos físicos (só o CS
+// muda) e pode tê-los roteado para si desde o último acesso ao cartão. Sem
+// isto, o TFT (Arduino_SWSPI, bit-bang via digitalWrite()) simplesmente
+// para de responder fisicamente depois do primeiro SD.begin()/leitura/
+// escrita — mesmo com o código de desenho certo — porque o pino deixa de
+// obedecer digitalWrite() enquanto restar roteado para o periférico de SPI.
+//
+// Reconfigurar incondicionalmente a cada chamada (em vez de só quando o
+// dono muda) chegou a corromper o cartão na prática ao ler um BMP linha a
+// linha (dezenas de reinicializações de SPI por segundo) — ver comentário
+// grande em armazenamento.hpp.
 class TravaBarramentoDisplay {
  public:
   TravaBarramentoDisplay() {
     armazenamento::travarBarramentoSPI();
-    pinMode(TFT_MOSI, OUTPUT);
-    pinMode(TFT_SCLK, OUTPUT);
-    pinMode(TFT_MISO, INPUT);
+    if (!armazenamento::donoAtualEhDisplay()) {
+      // Desseleciona o SD (CS em HIGH) ANTES de bit-bangar as linhas
+      // compartilhadas — sem isto, se SD_CS_PIN ficasse em LOW durante o
+      // bit-bang do TFT, o cartão interpretaria os pulsos de clock como
+      // tráfego SPI real endereçado a ele, corrompendo seu estado interno
+      // (observado na prática: "sdSelectCard(): Select Failed" logo após
+      // o primeiro desenho no display).
+      pinMode(SD_CS_PIN, OUTPUT);
+      digitalWrite(SD_CS_PIN, HIGH);
+      pinMode(TFT_MOSI, OUTPUT);
+      pinMode(TFT_SCLK, OUTPUT);
+      pinMode(TFT_MISO, INPUT);
+      armazenamento::marcarDonoDisplay();
+    }
   }
   ~TravaBarramentoDisplay() { armazenamento::destravarBarramentoSPI(); }
 };
@@ -196,7 +212,7 @@ void init() {
 
   if (!displayOk) {
     // Sem while(true)/return: registra a falha e deixa o restante do
-    // firmware (encoder, LEDs, sensores, MQTT, SD) continuar normalmente.
+    // firmware (encoder, LEDs, sensores, Bluetooth, SD) continuar normalmente.
     // Todas as funções de desenho abaixo checam displayOk antes de tocar
     // no ponteiro do display.
     Serial.println("[ERRO][DISPLAY] Inicializacao falhou - display marcado como indisponivel");
@@ -208,13 +224,6 @@ void init() {
 
     display->fillScreen(COR_FUNDO);
     layout::init(display->width(), display->height());
-    // O teste visual (vermelho/verde/azul/"Display OK") NÃO roda mais
-    // aqui: ele é uma etapa temporizada da própria sequência de boot
-    // (maquina_estados::EtapaBoot::DiagnosticoDisplay), disparada via
-    // ihm::executarDiagnosticoVisual() e limitada por
-    // DISPLAY_DIAGNOSTIC_DURATION_MS — assim a tela sempre avança
-    // sozinha para o logotipo/menu, controlada por millis(), em vez de
-    // depender de quanto tempo o resto de setup() demora para rodar.
   }
 
   if (FORCE_DISPLAY_BACKLIGHT_DIAGNOSTIC) {
@@ -243,40 +252,6 @@ void init() {
 }
 
 bool displayDisponivel() { return displayOk; }
-
-void executarDiagnosticoVisual() {
-  if (!displayOk) {
-    Serial.println("[DISPLAY] Diagnostico visual cancelado (display indisponivel)");
-    return;
-  }
-
-  Serial.printf("[DISPLAY] Objeto no diagnostico: %p\n", static_cast<void*>(display));
-  TravaBarramentoDisplay travaBus;
-  Serial.println("[DISPLAY] Teste visual integrado iniciado");
-
-  display->fillScreen(RGB565_RED);
-  Serial.println("[DISPLAY] Fundo vermelho enviado");
-  delay(300);
-
-  display->fillScreen(RGB565_GREEN);
-  Serial.println("[DISPLAY] Fundo verde enviado");
-  delay(300);
-
-  display->fillScreen(RGB565_BLUE);
-  Serial.println("[DISPLAY] Fundo azul enviado");
-  delay(300);
-
-  display->fillScreen(RGB565_BLACK);
-  display->setCursor(5, 10);
-  display->setTextColor(RGB565_WHITE);
-  display->setTextSize(1);
-  display->println("HardwareFisica");
-  display->setCursor(5, 25);
-  display->setTextColor(RGB565_YELLOW);
-  display->println("Display OK");
-
-  Serial.println("[DISPLAY] Teste visual integrado concluido");
-}
 
 int readEncoder(int maxPosition) {
   const int currentA = digitalRead(ENC_S1_PIN);
@@ -745,18 +720,28 @@ bool desenharImagemBMP(const char* nomeComExtensao, int16_t x, int16_t y, int16_
   const int16_t yCentralizado = y + (alturaMaxima - alturaSaida) / 2;
 
   uint8_t* linhaOrigem = static_cast<uint8_t*>(malloc(passoLinha));
-  uint16_t* linhaSaida = static_cast<uint16_t*>(malloc(static_cast<size_t>(larguraSaida) * sizeof(uint16_t)));
-  if (linhaOrigem == nullptr || linhaSaida == nullptr) {
-    Serial.println("[IHM] BMP: sem memoria para buffer de linha");
+  // Buffer da imagem de SAÍDA inteira (não só uma linha): lemos todas as
+  // linhas do SD primeiro e só depois desenhamos tudo de uma vez no TFT.
+  // Alternar dono do barramento (SD <-> display) a cada linha — mesmo só
+  // reconfigurando fisicamente quando o dono muda — ainda significava até
+  // duas trocas por linha (centenas por imagem); isso corrompeu o cartão
+  // na prática (falhas repetidas de CMD13/SEND_STATUS). Com o buffer
+  // completo, a troca acontece só 2 vezes no total: uma vez para ler tudo,
+  // uma vez para desenhar tudo.
+  uint16_t* framebuffer = static_cast<uint16_t*>(
+      malloc(static_cast<size_t>(larguraSaida) * static_cast<size_t>(alturaSaida) * sizeof(uint16_t)));
+  if (linhaOrigem == nullptr || framebuffer == nullptr) {
+    Serial.println("[IHM] BMP: sem memoria para buffer de imagem");
     free(linhaOrigem);
-    free(linhaSaida);
+    free(framebuffer);
     armazenamento::fecharBinario();
     return false;
   }
 
-  Serial.printf("[IHM] Desenhando BMP %s (%ldx%ld -> %dx%d)\n", nomeComExtensao,
+  Serial.printf("[IHM] Lendo BMP %s do SD (%ldx%ld -> %dx%d)\n", nomeComExtensao,
                 static_cast<long>(larguraOrigem), static_cast<long>(alturaOrigem), larguraSaida, alturaSaida);
 
+  bool leituraCompleta = true;
   for (int16_t linhaSaidaIdx = 0; linhaSaidaIdx < alturaSaida; linhaSaidaIdx++) {
     const int32_t linhaOrigemIdx = static_cast<int32_t>(linhaSaidaIdx * escala);
     // BMP padrão é bottom-up: a primeira linha do arquivo é a ÚLTIMA linha
@@ -769,9 +754,11 @@ bool desenharImagemBMP(const char* nomeComExtensao, int16_t x, int16_t y, int16_
     if (!armazenamento::posicionarBinario(offsetLinha) ||
         armazenamento::lerBinario(linhaOrigem, passoLinha) != passoLinha) {
       Serial.println("[IHM] BMP: falha de leitura no meio do arquivo, interrompendo");
+      leituraCompleta = false;
       break;
     }
 
+    uint16_t* linhaSaidaBuffer = framebuffer + static_cast<size_t>(linhaSaidaIdx) * larguraSaida;
     for (int16_t colunaSaidaIdx = 0; colunaSaidaIdx < larguraSaida; colunaSaidaIdx++) {
       const int32_t colunaOrigemIdx = static_cast<int32_t>(colunaSaidaIdx * escala);
       const uint8_t* pixel = linhaOrigem + static_cast<uint32_t>(colunaOrigemIdx) * bytesPorPixel;
@@ -779,18 +766,22 @@ bool desenharImagemBMP(const char* nomeComExtensao, int16_t x, int16_t y, int16_
       const uint8_t azul = pixel[0];
       const uint8_t verde = pixel[1];
       const uint8_t vermelho = pixel[2];
-      linhaSaida[colunaSaidaIdx] = static_cast<uint16_t>(((vermelho & 0xF8) << 8) |
-                                                          ((verde & 0xFC) << 3) | (azul >> 3));
+      linhaSaidaBuffer[colunaSaidaIdx] = static_cast<uint16_t>(((vermelho & 0xF8) << 8) |
+                                                                ((verde & 0xFC) << 3) | (azul >> 3));
     }
-
-    TravaBarramentoDisplay travaBus;
-    display->draw16bitRGBBitmap(xCentralizado, yCentralizado + linhaSaidaIdx, linhaSaida, larguraSaida, 1);
   }
 
   free(linhaOrigem);
-  free(linhaSaida);
   armazenamento::fecharBinario();
-  return true;
+
+  if (leituraCompleta) {
+    Serial.printf("[IHM] Desenhando BMP %s (leitura completa)\n", nomeComExtensao);
+    TravaBarramentoDisplay travaBus;
+    display->draw16bitRGBBitmap(xCentralizado, yCentralizado, framebuffer, larguraSaida, alturaSaida);
+  }
+
+  free(framebuffer);
+  return leituraCompleta;
 }
 
 }  // namespace ihm

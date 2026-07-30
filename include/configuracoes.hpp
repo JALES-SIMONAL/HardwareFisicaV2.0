@@ -4,7 +4,7 @@
 
 // Configurações de nível de dispositivo (brilho, volume, modo de operação)
 // persistidas em Preferences/NVS. Usadas tanto pela IHM local quanto pelo
-// MQTT — sempre pelas mesmas funções.
+// Bluetooth — sempre pelas mesmas funções.
 namespace configuracoes {
 
 enum class ModoOperacao : uint8_t { Hardware = 0, App = 1 };

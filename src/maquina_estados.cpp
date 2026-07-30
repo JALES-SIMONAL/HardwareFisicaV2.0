@@ -1,7 +1,6 @@
 #include "maquina_estados.hpp"
 
 #include <Arduino.h>
-#include <WiFi.h>
 #include <cstdio>
 #include <cstring>
 #include <qrcode.h>
@@ -10,12 +9,12 @@
 #include "analise_dados.hpp"
 #include "aquisicao.hpp"
 #include "armazenamento.hpp"
+#include "bluetooth_app.hpp"
 #include "canais.hpp"
 #include "configuracoes.hpp"
 #include "experimentos.hpp"
 #include "ihm.hpp"
 #include "layout.hpp"
-#include "mqtt_app.hpp"
 
 namespace maquina_estados {
 
@@ -48,7 +47,6 @@ void redesenharValorComVoltar(const char* titulo, int32_t valorExibido, int32_t 
 // Sequência de boot (não-bloqueante, baseada em millis())
 // ---------------------------------------------------------------------
 enum class EtapaBoot : uint8_t {
-  DiagnosticoDisplay,
   LogoMonkeyTech,
   LogoUFRN,
   LedVermelho,
@@ -59,13 +57,12 @@ enum class EtapaBoot : uint8_t {
   Concluido
 };
 
-EtapaBoot etapaBootAtual = EtapaBoot::DiagnosticoDisplay;
+EtapaBoot etapaBootAtual = EtapaBoot::LogoMonkeyTech;
 unsigned long inicioEtapaBootMs = 0;
 bool etapaBootDesenhada = false;
 
 const char* nomeEtapaBoot(EtapaBoot etapa) {
   switch (etapa) {
-    case EtapaBoot::DiagnosticoDisplay: return "DIAGNOSTICO_DISPLAY";
     case EtapaBoot::LogoMonkeyTech: return "LOGOTIPO_MONKEY_TECH";
     case EtapaBoot::LogoUFRN: return "LOGOTIPO_UFRN";
     case EtapaBoot::LedVermelho: return "TESTE_LEDS_VERMELHO";
@@ -85,15 +82,13 @@ void avancarBoot(EtapaBoot proxima) {
   Serial.printf("[STARTUP] Estado: %s\n", nomeEtapaBoot(etapaBootAtual));
 }
 
-// Tenta desenhar o BMP correspondente lido do microSD (arquivo esperado na
-// raiz do cartão, nomes 8.3 por segurança de compatibilidade); se o
-// cartão estiver indisponível, o arquivo não existir ou o formato não for
-// suportado, cai no texto simples — nunca trava nem deixa a tela em
-// branco. Ver docs/VALIDACAO_GERAL.md para os nomes de arquivo esperados.
+// Tenta desenhar o BMP correspondente lido da raiz do microSD; se o cartão
+// estiver indisponível, o arquivo não existir ou o formato não for
+// suportado, cai no texto simples — nunca trava nem deixa a tela em branco.
 void desenharLogoMonkeyTech() {
   const int16_t largura = layout::uiWidth(layout::UI_REFERENCE_WIDTH);
   const int16_t altura = layout::uiHeight(layout::UI_REFERENCE_HEIGHT);
-  if (!ihm::desenharImagemBMP("MONKEY.BMP", 0, 0, largura, altura)) {
+  if (!ihm::desenharImagemBMP("Monkey Tech.bmp", 0, 0, largura, altura)) {
     ihm::escreverTextoTela("Monkey Tech", layout::uiMargin(), layout::uiHeight(40),
                             0xFFFF, layout::uiFontSize(1), true);
   }
@@ -102,7 +97,7 @@ void desenharLogoMonkeyTech() {
 void desenharLogoUFRN() {
   const int16_t largura = layout::uiWidth(layout::UI_REFERENCE_WIDTH);
   const int16_t altura = layout::uiHeight(layout::UI_REFERENCE_HEIGHT);
-  if (!ihm::desenharImagemBMP("UFRN.BMP", 0, 0, largura, altura)) {
+  if (!ihm::desenharImagemBMP("UFRN.bmp", 0, 0, largura, altura)) {
     ihm::escreverTextoTela("UFRN", layout::uiMargin(), layout::uiHeight(70), 0xFFFF,
                             layout::uiFontSize(1), true);
   }
@@ -670,9 +665,9 @@ void tratarArquivoExcluirConfirmar(const Command& cmd) {
 }
 
 void tratarConexaoApp(const Command& cmd) {
-  constexpr uint8_t QTD_CONEXAO_APP = 6;
-  constexpr uint8_t ITEM_RECONECTAR = 4;
-  constexpr uint8_t ITEM_VOLTAR = 5;
+  constexpr uint8_t QTD_CONEXAO_APP = 5;
+  constexpr uint8_t ITEM_RECONECTAR = 3;
+  constexpr uint8_t ITEM_VOLTAR = 4;
 
   switch (cmd.tipo) {
     case CommandType::Next:
@@ -686,7 +681,7 @@ void tratarConexaoApp(const Command& cmd) {
       break;
     case CommandType::Confirm:
       if (estado.indiceSelecionado == ITEM_RECONECTAR) {
-        mqtt_app::reconectar();
+        bluetooth_app::reconectar();
         precisaRedesenhar = true;
       } else if (estado.indiceSelecionado == ITEM_VOLTAR) {
         voltarUmNivel();
@@ -838,7 +833,7 @@ void tratarAnaliseDistancia(const Command& cmd) {
     case CommandType::Confirm: {
       const float distanciaMetros = static_cast<float>(edicaoValor.valorTemp) / 100.0f;
       if (analise_dados::calcularVelocidade(deltaTAnaliseUs, distanciaMetros, velocidadeAnaliseMs)) {
-        mqtt_app::publicarResultadoAnalise(deltaTAnaliseUs, velocidadeAnaliseMs);
+        bluetooth_app::publicarResultadoAnalise(deltaTAnaliseUs, velocidadeAnaliseMs);
       } else {
         velocidadeAnaliseMs = 0.0f;
       }
@@ -1257,10 +1252,7 @@ void redesenharSobre() {
   char linhaModo[32];
   char linhaCanais[32];
 
-  uint8_t macLido[6];
-  WiFi.macAddress(macLido);
-  snprintf(linhaMac, sizeof(linhaMac), "MAC: %02X:%02X:%02X:%02X:%02X:%02X", macLido[0], macLido[1],
-           macLido[2], macLido[3], macLido[4], macLido[5]);
+  snprintf(linhaMac, sizeof(linhaMac), "MAC: %s", bluetooth_app::enderecoMac());
 
   const bool modoApp = (configuracoes::modoOperacao() == configuracoes::ModoOperacao::App);
   snprintf(linhaModo, sizeof(linhaModo), "Modo: %s", modoApp ? "Aplicativo" : "Hardware");
@@ -1273,11 +1265,9 @@ void redesenharSobre() {
   snprintf(linhaVersao, sizeof(linhaVersao), "Versao: %s", configuracoes::VERSAO_FIRMWARE);
   snprintf(linhaAutor, sizeof(linhaAutor), "Autor: %s", configuracoes::AUTOR);
 
-  char linhaWifi[24];
-  char linhaMqtt[24];
+  char linhaBt[24];
   char linhaSd[32];
-  snprintf(linhaWifi, sizeof(linhaWifi), "WiFi: %s", mqtt_app::wifiConectado() ? "conectado" : "offline");
-  snprintf(linhaMqtt, sizeof(linhaMqtt), "MQTT: %s", mqtt_app::mqttConectado() ? "conectado" : "offline");
+  snprintf(linhaBt, sizeof(linhaBt), "BT: %s", bluetooth_app::conectado() ? "conectado" : "desconectado");
   if (armazenamento::cartaoDisponivel()) {
     snprintf(linhaSd, sizeof(linhaSd), "SD: %lu/%lu KB",
              static_cast<unsigned long>(armazenamento::espacoUsadoBytes() / 1024),
@@ -1288,23 +1278,21 @@ void redesenharSobre() {
 
   const char* linhas[] = {
       linhaNome, linhaVersao, linhaAutor, linhaMac, linhaModo,
-      linhaCanais, linhaWifi, linhaMqtt, linhaSd, "Voltar",
+      linhaCanais, linhaBt, linhaSd, "Voltar",
   };
-  ihm::desenharListaRolavel("Sobre", linhas, 10, estado.offsetRolagem);
+  ihm::desenharListaRolavel("Sobre", linhas, 9, estado.offsetRolagem);
 }
 
 void redesenharConexaoApp() {
-  char linhaWifi[24];
-  char linhaIp[24];
-  char linhaMqtt[24];
+  char linhaBt[24];
+  char linhaMac[24];
   char linhaId[24];
-  snprintf(linhaWifi, sizeof(linhaWifi), "WiFi: %s", mqtt_app::wifiConectado() ? "conectado" : "offline");
-  snprintf(linhaIp, sizeof(linhaIp), "IP: %s", mqtt_app::enderecoIP());
-  snprintf(linhaMqtt, sizeof(linhaMqtt), "MQTT: %s", mqtt_app::mqttConectado() ? "conectado" : "offline");
-  snprintf(linhaId, sizeof(linhaId), "ID: %s", mqtt_app::deviceId());
+  snprintf(linhaBt, sizeof(linhaBt), "BT: %s", bluetooth_app::conectado() ? "conectado" : "desconectado");
+  snprintf(linhaMac, sizeof(linhaMac), "MAC: %s", bluetooth_app::enderecoMac());
+  snprintf(linhaId, sizeof(linhaId), "ID: %s", bluetooth_app::deviceId());
 
-  const char* itens[] = {linhaWifi, linhaIp, linhaMqtt, linhaId, "Reconectar", "Voltar"};
-  ihm::desenharListaMenu("Conexao com app", itens, 6, estado.indiceSelecionado, estado.offsetRolagem);
+  const char* itens[] = {linhaBt, linhaMac, linhaId, "Reconectar", "Voltar"};
+  ihm::desenharListaMenu("Conexao com app", itens, 5, estado.indiceSelecionado, estado.offsetRolagem);
 }
 
 void redesenharConfigCanaisIndividualLista() {
@@ -1487,12 +1475,12 @@ void imprimirHeartbeat() {
   if (agora - ultimoHeartbeatMs < 5000) return;
   ultimoHeartbeatMs = agora;
 
-  Serial.printf("[SISTEMA] Ativo | Tela=%s | Opcao=%s | Display=%s | SD=%s | MQTT=%s | Heap=%u\n",
+  Serial.printf("[SISTEMA] Ativo | Tela=%s | Opcao=%s | Display=%s | SD=%s | BT=%s | Heap=%u\n",
                 nomeTela(estado.telaAtual),
                 tituloOpcaoMenu(estado.telaAtual, estado.indiceSelecionado),
                 ihm::displayDisponivel() ? "OK" : "FALHA",
                 armazenamento::cartaoDisponivel() ? "OK" : "FALHA",
-                mqtt_app::mqttConectado() ? "OK" : "DESCONECTADO",
+                bluetooth_app::conectado() ? "CONECTADO" : "DESCONECTADO",
                 static_cast<unsigned>(ESP.getFreeHeap()));
 }
 
@@ -1664,27 +1652,14 @@ void atualizarBoot() {
   const unsigned long decorrido = millis() - inicioEtapaBootMs;
 
   switch (etapaBootAtual) {
-    case EtapaBoot::DiagnosticoDisplay:
-      if (!etapaBootDesenhada) {
-        // Etapa temporizada (não uma espera separada em ihm::init()):
-        // desenha uma única vez e deixa o millis() abaixo decidir quando
-        // avançar para o logotipo — a tela nunca fica presa aqui.
-        ihm::executarDiagnosticoVisual();
-        etapaBootDesenhada = true;
-      }
-      if (decorrido >= DISPLAY_DIAGNOSTIC_DURATION_MS) avancarBoot(EtapaBoot::LogoMonkeyTech);
-      break;
-
     case EtapaBoot::LogoMonkeyTech:
       if (!etapaBootDesenhada) {
         desenharLogoMonkeyTech();
         etapaBootDesenhada = true;
       }
-      // Cada logo é uma etapa própria (antes os dois textos ficavam juntos
-      // na mesma tela) — o BMP lido do SD é maior/mais lento de desenhar
-      // que o texto, então a duração já folgada garante tempo de sobra
-      // depois do desenho, mesmo se o desenho demorar.
-      if (decorrido >= 1500) avancarBoot(EtapaBoot::LogoUFRN);
+      // ~2s de exibição, contados a partir do desenho (BMP lido do SD é
+      // mais lento que texto; a tela nunca fica presa aqui).
+      if (decorrido >= 2000) avancarBoot(EtapaBoot::LogoUFRN);
       break;
 
     case EtapaBoot::LogoUFRN:
@@ -1692,11 +1667,7 @@ void atualizarBoot() {
         desenharLogoUFRN();
         etapaBootDesenhada = true;
       }
-      // UFRN.bmp (ver docs/VALIDACAO_GERAL.md) pode ser um arquivo bem
-      // maior que a tela — o redimensionamento por leitura em blocos do
-      // SD pode levar até alguns segundos; duração maior aqui evita que
-      // o logotipo mal apareça antes de avançar.
-      if (decorrido >= 2500) avancarBoot(EtapaBoot::LedVermelho);
+      if (decorrido >= 2000) avancarBoot(EtapaBoot::LedVermelho);
       break;
 
     case EtapaBoot::LedVermelho:
@@ -1762,7 +1733,7 @@ void atualizarBoot() {
 
 void init() {
   estado.telaAtual = Tela::Boot;
-  etapaBootAtual = ENABLE_DISPLAY_STARTUP_TEST ? EtapaBoot::DiagnosticoDisplay : EtapaBoot::LogoMonkeyTech;
+  etapaBootAtual = EtapaBoot::LogoMonkeyTech;
   inicioEtapaBootMs = millis();
   etapaBootDesenhada = false;
   Serial.printf("[STARTUP] Estado: %s\n", nomeEtapaBoot(etapaBootAtual));
@@ -1770,14 +1741,14 @@ void init() {
 
 void tick() {
   // Aquisição/armazenamento rodam em tarefa própria no núcleo 0 (ver
-  // main.cpp); esta função (tick) roda no núcleo 1, junto com MQTT.
+  // main.cpp); esta função (tick) roda no núcleo 1, junto com Bluetooth.
   static bool primeiroTick = true;
   if (primeiroTick) {
     Serial.println("[TASK][IHM] Tarefa iniciada");
     primeiroTick = false;
   }
 
-  mqtt_app::loop();
+  bluetooth_app::loop();
   imprimirHeartbeat();
 
   if (estado.telaAtual == Tela::Boot) {
@@ -1821,8 +1792,9 @@ void tick() {
 void processarComando(const Command& cmd, Origem /*origem*/) {
   // Comandos "globais": agem direto sobre os módulos (as MESMAS funções que
   // as telas locais chamam), independente da tela atual. Na prática só o
-  // MQTT os emite hoje — o encoder local só gera Next/Previous/Confirm/Back
-  // — mas continuam disponíveis para qualquer origem futura.
+  // Bluetooth os emite hoje — o encoder local só gera
+  // Next/Previous/Confirm/Back — mas continuam disponíveis para qualquer
+  // origem futura.
   switch (cmd.tipo) {
     case CommandType::SetBrightness:
       configuracoes::definirBrilho(static_cast<uint8_t>(cmd.valor));
@@ -1846,7 +1818,7 @@ void processarComando(const Command& cmd, Origem /*origem*/) {
       canais::restaurarPadrao();
       return;
     case CommandType::StartExperiment:
-      Serial.println("[EXPERIMENTO] Iniciando experimento (comando MQTT)");
+      Serial.println("[EXPERIMENTO] Iniciando experimento (comando Bluetooth)");
       if (experimentos::iniciar(static_cast<uint16_t>(cmd.valor > 0 ? cmd.valor : 1))) {
         navegarPara(Tela::ExperimentoExecucao);
       } else {
@@ -1855,12 +1827,12 @@ void processarComando(const Command& cmd, Origem /*origem*/) {
       return;
     case CommandType::StopExperiment:
     case CommandType::CancelExperiment:
-      Serial.println("[EXPERIMENTO] Cancelado/parado (comando MQTT)");
+      Serial.println("[EXPERIMENTO] Cancelado/parado (comando Bluetooth)");
       experimentos::cancelar();
       navegarPara(Tela::Experimentos);
       return;
     case CommandType::FinishRepetition:
-      Serial.println("[EXPERIMENTO] Finalizando repeticao (comando MQTT)");
+      Serial.println("[EXPERIMENTO] Finalizando repeticao (comando Bluetooth)");
       experimentos::finalizarRepeticaoAtual();
       precisaRedesenhar = true;
       return;

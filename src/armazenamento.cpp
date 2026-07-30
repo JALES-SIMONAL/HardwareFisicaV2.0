@@ -49,19 +49,60 @@ SemaphoreHandle_t mutexArquivo = nullptr;
 // existir; não há ainda nenhum acesso ao SD para disputar o barramento).
 SemaphoreHandle_t mutexBarramentoSPI = nullptr;
 
-// RAII: toma o mutex do barramento e o rotea de volta para o periférico de
-// SPI de hardware (a IHM pode tê-lo devolvido para GPIO simples desde o
-// último acesso ao cartão) — só então é seguro fazer qualquer SD.*/File.*.
+// true = último lado a reconfigurar fisicamente o barramento foi o
+// display; false = foi o SD. Só existe para evitar reconfigurar
+// (SPI.begin()/pinMode()) quando o dono não mudou — ver comentário grande
+// em armazenamento.hpp. Começa true: ihm::init() (display->begin(), via
+// Arduino_SWSPI bit-bang) sempre roda antes de armazenamento::init() nesta
+// aplicação, então os pinos já estão fisicamente em modo GPIO/bit-bang
+// quando o primeiro TravaBarramentoSD desta sessão é construído — sem
+// isto, o SD.begin() inicial rodaria achando (por causa do valor padrão)
+// que não precisa chamar SPI.begin(), e ficaria sem resposta física.
+bool donoEhDisplay = true;
+
+// RAII: toma o mutex do barramento e, só se o dono estiver de fato
+// mudando (do display para o SD), rotea os pinos de volta para o
+// periférico de SPI de hardware. Chamar SPI.begin() incondicionalmente a
+// cada acesso — inclusive entre leituras consecutivas do próprio SD, como
+// uma linha de BMP após a outra — reinicializa o periférico de SPI dezenas
+// de vezes por segundo e corrompe o estado interno do cartão na prática.
 class TravaBarramentoSD {
  public:
   TravaBarramentoSD() {
     if (mutexBarramentoSPI != nullptr) xSemaphoreTake(mutexBarramentoSPI, portMAX_DELAY);
-    SPI.begin(TFT_SCLK, TFT_MISO, TFT_MOSI, SD_CS_PIN);
+    if (donoEhDisplay) {
+      // Desseleciona o TFT (CS em HIGH) ANTES de usar o SPI de hardware
+      // para o SD — simétrico à mesma proteção do lado do display (ver
+      // TravaBarramentoDisplay em ihm.cpp). Sem isto, se TFT_CS ficasse em
+      // LOW durante o tráfego SPI do SD, o controlador do display
+      // interpretaria esse tráfego como comandos endereçados a ele.
+      pinMode(TFT_CS, OUTPUT);
+      digitalWrite(TFT_CS, HIGH);
+      SPI.begin(TFT_SCLK, TFT_MISO, TFT_MOSI, SD_CS_PIN);
+      donoEhDisplay = false;
+    }
   }
   ~TravaBarramentoSD() {
     if (mutexBarramentoSPI != nullptr) xSemaphoreGive(mutexBarramentoSPI);
   }
 };
+
+// Reinicialização completa do cartão (CMD0/CMD8/ACMD41 de novo via
+// SD.begin()) — diferente de só religar o roteamento dos pinos
+// (TravaBarramentoSD). Observado na prática: mesmo com o CS do outro lado
+// sempre desselecionado, a primeira operação de SD logo após um desenho no
+// display às vezes falha (sdSelectCard()/CMD13 repetidamente) porque a
+// sessão interna do cartão morre — só um SD.end()+SD.begin() novo
+// recupera; tentar SD.open() de novo sem remontar bate na mesma falha,
+// porque o driver já esgotou as tentativas dele antes de devolver erro.
+// Só chamar já dentro de um TravaBarramentoSD (bus já roteado para o SD).
+bool remontarCartaoSD() {
+  Serial.println("[SD] Operacao falhou, tentando remontar o cartao");
+  SD.end();
+  const bool ok = SD.begin(SD_CS_PIN);
+  Serial.printf("[SD] Remontagem: %s\n", ok ? "sucesso" : "falha");
+  return ok;
+}
 
 // Só chamar já com mutexArquivo tomado.
 void descarregarBufferInterno() {
@@ -279,6 +320,14 @@ bool abrirBinarioParaLeitura(const char* nomeComExtensao) {
   snprintf(caminho, sizeof(caminho), "/%s", nomeComExtensao);
 
   arquivoBinario = SD.open(caminho, FILE_READ);
+  if (!arquivoBinario) {
+    // Falha na primeira tentativa: pode ser a sessão do cartão tendo
+    // morrido (ver comentário de remontarCartaoSD()) — remonta e tenta
+    // uma única vez mais antes de desistir.
+    if (remontarCartaoSD()) {
+      arquivoBinario = SD.open(caminho, FILE_READ);
+    }
+  }
   if (!arquivoBinario) return false;
 
   binarioAberto = true;
@@ -328,5 +377,9 @@ void travarBarramentoSPI() {
 void destravarBarramentoSPI() {
   if (mutexBarramentoSPI != nullptr) xSemaphoreGive(mutexBarramentoSPI);
 }
+
+bool donoAtualEhDisplay() { return donoEhDisplay; }
+
+void marcarDonoDisplay() { donoEhDisplay = true; }
 
 }  // namespace armazenamento

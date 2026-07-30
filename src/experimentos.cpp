@@ -9,8 +9,8 @@
 #include "MAIN.HPP"
 #include "aquisicao.hpp"
 #include "armazenamento.hpp"
+#include "bluetooth_app.hpp"
 #include "ihm.hpp"
-#include "mqtt_app.hpp"
 
 namespace experimentos {
 
@@ -29,7 +29,7 @@ int64_t inicioRepeticaoUs = 0;
 // iniciar()/finalizarRepeticaoAtual()/cancelar() e os getters são chamados
 // pela IHM (núcleo 1); aoReceberEventoValido() roda na tarefa de aquisição
 // (núcleo 0). Este spinlock protege as variáveis acima — nunca envolve
-// chamadas de E/S (armazenamento/mqtt_app), só leitura/escrita das
+// chamadas de E/S (armazenamento/bluetooth_app), só leitura/escrita das
 // variáveis, para a seção crítica ficar curta.
 portMUX_TYPE mux = portMUX_INITIALIZER_UNLOCKED;
 
@@ -46,7 +46,7 @@ void aoReceberEventoValido(uint8_t canal1based, bool novoEstado, int64_t tempoUs
   snprintf(linha, sizeof(linha), "%u,%c,%lld", static_cast<unsigned>(canal1based),
            novoEstado ? 'H' : 'L', static_cast<long long>(tempoRelativoUs));
   armazenamento::enfileirarLinha(linha);
-  mqtt_app::publicarEvento(canal1based, novoEstado ? 'H' : 'L', tempoRelativoUs);
+  bluetooth_app::publicarEvento(canal1based, novoEstado ? 'H' : 'L', tempoRelativoUs);
   // Bipe curto de confirmação por evento válido (Fase 10): silencioso se
   // volume==0; curto de propósito para não atrapalhar eventos em sequência
   // rápida. ihm::beep()/tone() não usa o barramento SPI compartilhado nem

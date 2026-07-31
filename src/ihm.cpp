@@ -97,6 +97,7 @@ class TravaBarramentoDisplay {
   TravaBarramentoDisplay() {
     armazenamento::travarBarramentoSPI();
     if (!armazenamento::donoAtualEhDisplay()) {
+      armazenamento::logDiagnosticoBarramento("ANTES troca SD->Display");
       // Desseleciona o SD (CS em HIGH) ANTES de bit-bangar as linhas
       // compartilhadas — sem isto, se SD_CS_PIN ficasse em LOW durante o
       // bit-bang do TFT, o cartão interpretaria os pulsos de clock como
@@ -109,6 +110,7 @@ class TravaBarramentoDisplay {
       pinMode(TFT_SCLK, OUTPUT);
       pinMode(TFT_MISO, INPUT);
       armazenamento::marcarDonoDisplay();
+      armazenamento::logDiagnosticoBarramento("DEPOIS troca SD->Display");
     }
   }
   ~TravaBarramentoDisplay() { armazenamento::destravarBarramentoSPI(); }

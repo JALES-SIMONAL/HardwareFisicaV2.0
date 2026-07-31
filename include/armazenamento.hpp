@@ -108,4 +108,13 @@ bool donoAtualEhDisplay();
 // dono do barramento físico.
 void marcarDonoDisplay();
 
+// ---------------------------------------------------------------------
+// Diagnóstico temporário (falha "File system is not mounted" ao iniciar um
+// experimento após navegar bastante pelo menu) — ver comentário grande em
+// armazenamento.cpp. Loga core/timestamp/contador de trocas/nível elétrico
+// dos pinos compartilhados. Chamada tanto daqui (troca para SD) quanto de
+// ihm.cpp (troca para display), para ver os dois lados da troca de dono.
+// ---------------------------------------------------------------------
+void logDiagnosticoBarramento(const char* contexto);
+
 }  // namespace armazenamento

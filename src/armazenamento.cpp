@@ -13,6 +13,13 @@
 
 namespace armazenamento {
 
+// Declarada aqui (fora do namespace anônimo) para poder ser chamada de
+// ihm.cpp; definida mais abaixo, depois do namespace anônimo, mas ainda
+// acessa contadorTrocasBarramento/donoEhDisplay normalmente — variáveis de
+// namespace anônimo têm ligação interna, mas são visíveis em toda a
+// unidade de tradução, não só dentro do bloco anônimo.
+void logDiagnosticoBarramento(const char* contexto);
+
 namespace {
 
 struct LinhaCSV {
@@ -60,6 +67,17 @@ SemaphoreHandle_t mutexBarramentoSPI = nullptr;
 // que não precisa chamar SPI.begin(), e ficaria sem resposta física.
 bool donoEhDisplay = true;
 
+// ---------------------------------------------------------------------
+// Diagnóstico temporário da falha "File system is not mounted" /
+// "sdSelectCard(): Select Failed" observada ao iniciar um experimento
+// depois de navegar bastante pelo menu (muitas trocas de dono do
+// barramento). Conta quantas vezes o barramento troca de dono desde o
+// boot e imprime o nível elétrico atual de cada pino compartilhado nos
+// pontos-chave (troca de dono, remontagem, abertura de arquivo) — ajuda a
+// ver se algum pino fica "preso" num nível errado quando a falha ocorre.
+// ---------------------------------------------------------------------
+uint32_t contadorTrocasBarramento = 0;
+
 // RAII: toma o mutex do barramento e, só se o dono estiver de fato
 // mudando (do display para o SD), rotea os pinos de volta para o
 // periférico de SPI de hardware. Chamar SPI.begin() incondicionalmente a
@@ -71,6 +89,7 @@ class TravaBarramentoSD {
   TravaBarramentoSD() {
     if (mutexBarramentoSPI != nullptr) xSemaphoreTake(mutexBarramentoSPI, portMAX_DELAY);
     if (donoEhDisplay) {
+      logDiagnosticoBarramento("ANTES troca Display->SD");
       // Desseleciona o TFT (CS em HIGH) ANTES de usar o SPI de hardware
       // para o SD — simétrico à mesma proteção do lado do display (ver
       // TravaBarramentoDisplay em ihm.cpp). Sem isto, se TFT_CS ficasse em
@@ -78,8 +97,21 @@ class TravaBarramentoSD {
       // interpretaria esse tráfego como comandos endereçados a ele.
       pinMode(TFT_CS, OUTPUT);
       digitalWrite(TFT_CS, HIGH);
+      // SPI.begin() só reanexa SCK/MISO/MOSI ao periférico de hardware na
+      // PRIMEIRA vez que é chamado nesta instância — depois disso, se _spi
+      // já não é nulo, ele retorna sem reanexar nada (ver
+      // SPIClass::begin() em SPI.cpp: "if (_spi) { return; }"). Como
+      // TravaBarramentoDisplay desanexa esses pinos de propósito
+      // (pinMode() para bit-bang), sem o end() aqui o SPI.begin() abaixo
+      // virava no-op a partir da segunda troca de dono: os pinos ficavam
+      // presos em modo GPIO simples, nunca voltavam a ser roteados para o
+      // periférico SPI, e o cartão ficava sem resposta física dali em
+      // diante ("sdSelectCard(): Select Failed" mesmo após remontar).
+      SPI.end();
       SPI.begin(TFT_SCLK, TFT_MISO, TFT_MOSI, SD_CS_PIN);
       donoEhDisplay = false;
+      contadorTrocasBarramento++;
+      logDiagnosticoBarramento("DEPOIS troca Display->SD");
     }
   }
   ~TravaBarramentoSD() {
@@ -98,9 +130,16 @@ class TravaBarramentoSD {
 // Só chamar já dentro de um TravaBarramentoSD (bus já roteado para o SD).
 bool remontarCartaoSD() {
   Serial.println("[SD] Operacao falhou, tentando remontar o cartao");
+  logDiagnosticoBarramento("ANTES remontarCartaoSD (SD.end)");
   SD.end();
+  // Pequeno atraso de acomodacao antes de tentar de novo: se a falha for de
+  // origem eletrica/tempo de estabilizacao do barramento apos a troca de
+  // dono (display->SD), remontar imediatamente pode bater na mesma falha.
+  delay(50);
+  logDiagnosticoBarramento("ANTES remontarCartaoSD (SD.begin)");
   const bool ok = SD.begin(SD_CS_PIN);
   Serial.printf("[SD] Remontagem: %s\n", ok ? "sucesso" : "falha");
+  logDiagnosticoBarramento("DEPOIS remontarCartaoSD");
   return ok;
 }
 
@@ -124,6 +163,16 @@ void fecharArquivoAtualInterno() {
 }
 
 }  // namespace
+
+void logDiagnosticoBarramento(const char* contexto) {
+  Serial.printf(
+      "[DIAG][BARRAMENTO] %s | core=%d | ms=%lu | trocas=%lu | donoEhDisplay=%d | "
+      "TFT_CS=%d TFT_MOSI=%d TFT_SCLK=%d TFT_MISO=%d SD_CS=%d | heap=%u\n",
+      contexto, static_cast<int>(xPortGetCoreID()), static_cast<unsigned long>(millis()),
+      static_cast<unsigned long>(contadorTrocasBarramento), static_cast<int>(donoEhDisplay),
+      digitalRead(TFT_CS), digitalRead(TFT_MOSI), digitalRead(TFT_SCLK), digitalRead(TFT_MISO),
+      digitalRead(SD_CS_PIN), static_cast<unsigned>(ESP.getFreeHeap()));
+}
 
 void init() {
   filaLinhas = xQueueCreate(CSV_LINE_QUEUE_LEN, sizeof(LinhaCSV));
@@ -152,20 +201,39 @@ bool arquivoExiste(const char* nomeComExtensao) {
 }
 
 bool abrirNovoArquivo(const char* nomeSemExtensao, bool sobrescrever) {
+  Serial.printf("[DIAG][SD] abrirNovoArquivo(\"%s\") chamado | cartaoOk=%d\n", nomeSemExtensao,
+                static_cast<int>(cartaoOk));
   if (!cartaoOk) return false;
 
   TravaBarramentoSD travaBus;
+  logDiagnosticoBarramento("abrirNovoArquivo apos TravaBarramentoSD");
 
   char caminho[32];
   snprintf(caminho, sizeof(caminho), "/%s.csv", nomeSemExtensao);
 
-  if (SD.exists(caminho) && !sobrescrever) return false;
+  const bool existiaAntes = SD.exists(caminho);
+  Serial.printf("[DIAG][SD] SD.exists(\"%s\") = %d\n", caminho, static_cast<int>(existiaAntes));
+  if (existiaAntes && !sobrescrever) return false;
 
   xSemaphoreTake(mutexArquivo, portMAX_DELAY);
 
   if (arquivoAberto) fecharArquivoAtualInterno();
 
   arquivoAtual = SD.open(caminho, FILE_WRITE);
+  Serial.printf("[DIAG][SD] 1a tentativa SD.open(\"%s\", FILE_WRITE) = %d\n", caminho,
+                static_cast<int>(static_cast<bool>(arquivoAtual)));
+  if (!arquivoAtual) {
+    // Mesmo sintoma documentado em remontarCartaoSD(): a primeira operação
+    // de SD após uma sequência de desenhos no display (troca de barramento
+    // display<->SD) pode achar a sessão do cartão morta ("File system is
+    // not mounted"). Sem isto, abrir um experimento novo falhava sempre
+    // que o usuário tinha acabado de navegar pelo menu antes de confirmar.
+    if (remontarCartaoSD()) {
+      arquivoAtual = SD.open(caminho, FILE_WRITE);
+      Serial.printf("[DIAG][SD] 2a tentativa (pos remontagem) SD.open(\"%s\", FILE_WRITE) = %d\n",
+                    caminho, static_cast<int>(static_cast<bool>(arquivoAtual)));
+    }
+  }
   const bool ok = static_cast<bool>(arquivoAtual);
   if (ok) {
     arquivoAtual.print("canal,estado,tempo_us\n");
@@ -174,6 +242,8 @@ bool abrirNovoArquivo(const char* nomeSemExtensao, bool sobrescrever) {
   } else {
     erros++;
   }
+  Serial.printf("[DIAG][SD] abrirNovoArquivo(\"%s\") resultado final = %d\n", nomeSemExtensao,
+                static_cast<int>(ok));
 
   xSemaphoreGive(mutexArquivo);
   return ok;
@@ -380,6 +450,9 @@ void destravarBarramentoSPI() {
 
 bool donoAtualEhDisplay() { return donoEhDisplay; }
 
-void marcarDonoDisplay() { donoEhDisplay = true; }
+void marcarDonoDisplay() {
+  donoEhDisplay = true;
+  contadorTrocasBarramento++;
+}
 
 }  // namespace armazenamento

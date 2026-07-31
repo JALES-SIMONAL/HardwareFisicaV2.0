@@ -26,6 +26,16 @@ uint16_t totalRepeticoesNum = 1;
 uint32_t eventosRepeticaoAtual = 0;
 int64_t inicioRepeticaoUs = 0;
 
+// Piscada de LED por evento válido: verde para transição L->H, vermelho
+// para H->L (indicação visual imediata de qual canal disparou e em que
+// direção, além do bipe e do registro no CSV). ledDesligarEmMs[i]==0
+// significa "nada pendente". Só acessado dentro da tarefa do núcleo 0
+// (aoReceberEventoValido() e atualizarLedsPiscando() rodam na mesma
+// tarefa/loop em main.cpp, nunca concorrentemente) — não precisa do mux
+// acima, que só protege o estado compartilhado com o núcleo 1 (IHM).
+constexpr uint32_t DURACAO_PISCA_LED_MS = 150;
+uint32_t ledDesligarEmMs[NUM_CHANNELS] = {};
+
 // iniciar()/finalizarRepeticaoAtual()/cancelar() e os getters são chamados
 // pela IHM (núcleo 1); aoReceberEventoValido() roda na tarefa de aquisição
 // (núcleo 0). Este spinlock protege as variáveis acima — nunca envolve
@@ -53,6 +63,23 @@ void aoReceberEventoValido(uint8_t canal1based, bool novoEstado, int64_t tempoUs
   // o canal PWM do backlight — seguro chamar daqui (núcleo 0/tarefa de
   // aquisição), sem tocar em display ou microSD.
   ihm::beep(20);
+
+  // Pisca o LED do canal: verde para L->H, vermelho para H->L. O NeoPixel
+  // (PIN_NEO) também não usa o barramento SPI compartilhado, então é
+  // seguro acender daqui (núcleo 0) mesmo com a IHM desenhando no núcleo 1
+  // — o único risco seria escrever no MESMO LED a partir dos dois núcleos
+  // ao mesmo tempo, o que não acontece: a tela de teste de canais (única
+  // outra dona dos LEDs) fica numa tela diferente da execução do
+  // experimento.
+  const uint16_t indiceLed = static_cast<uint16_t>(canal1based - 1);
+  if (indiceLed < NUM_LEDS) {
+    if (novoEstado) {
+      ihm::controlarLED(indiceLed, 0, 255, 0);  // L->H: verde
+    } else {
+      ihm::controlarLED(indiceLed, 255, 0, 0);  // H->L: vermelho
+    }
+    ledDesligarEmMs[indiceLed] = millis() + DURACAO_PISCA_LED_MS;
+  }
 
   portENTER_CRITICAL(&mux);
   eventosRepeticaoAtual++;
@@ -115,6 +142,16 @@ void cancelar() {
   portENTER_CRITICAL(&mux);
   fase = Fase::Inativo;
   portEXIT_CRITICAL(&mux);
+}
+
+void atualizarLedsPiscando() {
+  const uint32_t agora = millis();
+  for (uint16_t i = 0; i < NUM_CHANNELS && i < NUM_LEDS; i++) {
+    if (ledDesligarEmMs[i] != 0 && agora >= ledDesligarEmMs[i]) {
+      ihm::controlarLED(i, 0, 0, 0, 0);
+      ledDesligarEmMs[i] = 0;
+    }
+  }
 }
 
 bool emAndamento() {

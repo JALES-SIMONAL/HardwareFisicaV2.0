@@ -22,6 +22,12 @@ void finalizarRepeticaoAtual();
 // Cancela tudo: fecha e descarta o arquivo de trabalho.
 void cancelar();
 
+// Desliga (após um curto período) os LEDs acesos por aoReceberEventoValido()
+// para indicar um evento válido — ver comentário grande em experimentos.cpp.
+// Chamada periodicamente pela mesma tarefa que drena a fila de eventos
+// (núcleo 0); nunca bloqueia.
+void atualizarLedsPiscando();
+
 bool emAndamento();
 bool aguardandoNomeArquivo();
 

@@ -27,6 +27,7 @@ void tarefaAquisicaoArmazenamento(void* /*parametro*/) {
   for (;;) {
     aquisicao::processarFilaEventos();
     armazenamento::processarFila();
+    experimentos::atualizarLedsPiscando();
     vTaskDelay(pdMS_TO_TICKS(2));
   }
 }

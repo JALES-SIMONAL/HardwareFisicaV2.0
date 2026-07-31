@@ -10,9 +10,10 @@ namespace comandos {
 
 // Modo de borda considerado válido para registro de um canal de sensor.
 enum class EdgeMode : uint8_t {
-  Falling = 0,  // H para L
-  Rising = 1,   // L para H
-  Both = 2      // ambas
+  Falling = 0,    // H para L
+  Rising = 1,     // L para H
+  Both = 2,       // ambas
+  Disabled = 3    // canal ignorado por completo (nenhum evento registrado)
 };
 
 enum class CommandType : uint8_t {

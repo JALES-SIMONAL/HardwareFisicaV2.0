@@ -827,6 +827,12 @@ bool desenharImagemBMP(const char* nomeComExtensao, int16_t x, int16_t y, int16_
   if (leituraCompleta) {
     Serial.printf("[IHM] Desenhando BMP %s (leitura completa)\n", nomeComExtensao);
     TravaBarramentoDisplay travaBus;
+    // Limpa a área de destino ANTES de desenhar: a imagem é centralizada
+    // sem nunca ampliar (preserva proporção), então uma imagem com
+    // proporção diferente da anterior pode não cobrir toda a área,
+    // deixando sobras da imagem/tela anterior visíveis nas bordas (ex.:
+    // a logo da UFRN "sobrepondo" a da Monkey Tech na inicialização).
+    display->fillRect(x, y, larguraMaxima, alturaMaxima, COR_FUNDO);
     display->draw16bitRGBBitmap(xCentralizado, yCentralizado, framebuffer, larguraSaida, alturaSaida);
     display->flush();
   }

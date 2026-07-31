@@ -122,13 +122,26 @@ void definirTodosLeds(uint8_t r, uint8_t g, uint8_t b, uint8_t brilho) {
 // ---------------------------------------------------------------------
 struct EstadoNavegacao {
   Tela telaAtual = Tela::Boot;
-  Tela telaAnterior = Tela::Boot;
   uint8_t indiceSelecionado = 0;
   uint8_t offsetRolagem = 0;
 };
 
 EstadoNavegacao estado;
 bool precisaRedesenhar = false;
+
+// Pilha de navegação: cada navegarPara() empilha a tela de origem; cada
+// voltarUmNivel() desempilha. Substitui um antigo campo único "tela
+// anterior" (histórico de só 1 nível) que travava o botão Voltar em
+// qualquer fluxo com 3+ níveis de profundidade — ex.: ConfigCanais ->
+// ConfigCanaisTodos -> ConfigCanaisTodosConfirmar; ao voltar da
+// confirmação para ConfigCanaisTodos, o único campo ficava preso
+// apontando pra ConfigCanaisTodos (valor antigo), então um segundo
+// "Voltar" ali virava um no-op (telaAtual = telaAnterior = a própria tela
+// atual). Com a pilha, cada nível de volta desempilha o nível
+// corretamente, não importa a profundidade.
+constexpr uint8_t PROFUNDIDADE_MAXIMA_PILHA_TELAS = 16;
+Tela pilhaNavegacao[PROFUNDIDADE_MAXIMA_PILHA_TELAS];
+uint8_t topoPilhaNavegacao = 0;
 
 constexpr const char* ITENS_MENU_PRINCIPAL[] = {
     "Configuracoes",
@@ -168,10 +181,12 @@ constexpr const char* ITENS_CONFIG_CANAIS[] = {
 };
 constexpr uint8_t QTD_CONFIG_CANAIS = 5;
 
-// "H para L"=Falling(0), "L para H"=Rising(1), "Ambos"=Both(2): a ordem
-// desta lista casa de propósito com os valores do enum EdgeMode.
-constexpr const char* ITENS_MODO_BORDA[] = {"H para L", "L para H", "Ambos", "Voltar"};
-constexpr uint8_t QTD_MODO_BORDA = 4;
+// "H para L"=Falling(0), "L para H"=Rising(1), "Ambos"=Both(2),
+// "Desabilitado"=Disabled(3): a ordem desta lista casa de propósito com os
+// valores do enum EdgeMode ("Voltar" é só um item de UI, sem EdgeMode
+// correspondente).
+constexpr const char* ITENS_MODO_BORDA[] = {"H para L", "L para H", "Ambos", "Desabilitado", "Voltar"};
+constexpr uint8_t QTD_MODO_BORDA = 5;
 
 // Estado temporário compartilhado pelo fluxo de configuração de canais:
 // canal em edição (1..NUM_CHANNELS) e modo escolhido, pendente de confirmação.
@@ -300,7 +315,40 @@ void navegarPara(Tela destino) {
   Serial.printf("[MENU] Abrindo: %s\n",
                 tituloOpcaoMenu(estado.telaAtual, estado.indiceSelecionado));
   Serial.printf("[ESTADO] Tela: %s -> %s\n", nomeTela(estado.telaAtual), nomeTela(destino));
-  estado.telaAnterior = estado.telaAtual;
+
+  // Muitos fluxos terminam chamando navegarPara() para VOLTAR a uma tela
+  // ancestral já visitada (ex.: confirmarConfigTodosSim() chama
+  // navegarPara(ConfigCanais) depois de salvar) — isto não é uma navegação
+  // nova "para a frente", é um retorno. Empilhar incondicionalmente nesse
+  // caso deixava entradas obsoletas na pilha (a própria tela de
+  // confirmação que acabou de ser resolvida), e um "Voltar" seguinte
+  // reaparecia nela, refazendo a ação (salvar) em loop. Por isso: se
+  // "destino" já está entre os ancestrais na pilha atual, trunca até lá em
+  // vez de empilhar de novo — só empilha quando é navegação nova de
+  // verdade.
+  bool destinoJaEraAncestral = false;
+  for (uint8_t i = 0; i < topoPilhaNavegacao; i++) {
+    if (pilhaNavegacao[i] == destino) {
+      topoPilhaNavegacao = i;
+      destinoJaEraAncestral = true;
+      break;
+    }
+  }
+
+  if (!destinoJaEraAncestral) {
+    if (topoPilhaNavegacao < PROFUNDIDADE_MAXIMA_PILHA_TELAS) {
+      pilhaNavegacao[topoPilhaNavegacao] = estado.telaAtual;
+      topoPilhaNavegacao++;
+    } else {
+      // Não deveria acontecer em uso normal (profundidade de menu real é
+      // bem menor que 16) — loga em vez de estourar o array; o pior caso é
+      // "Voltar" truncar o histórico mais antigo, nunca corromper memória.
+      Serial.println("[ESTADO] Aviso: pilha de navegacao cheia, historico mais antigo descartado");
+    }
+  }
+  Serial.printf("[ESTADO] Pilha de navegacao: profundidade=%u (retorno a ancestral: %s)\n",
+                static_cast<unsigned>(topoPilhaNavegacao), destinoJaEraAncestral ? "sim" : "nao");
+
   estado.telaAtual = destino;
   estado.indiceSelecionado = 0;
   estado.offsetRolagem = 0;
@@ -313,8 +361,14 @@ void voltarUmNivel() {
     definirTodosLeds(0, 0, 0, 0);
   }
   Serial.println("[MENU] Abrindo: Voltar");
-  Serial.printf("[ESTADO] Tela: %s -> %s\n", nomeTela(estado.telaAtual), nomeTela(estado.telaAnterior));
-  estado.telaAtual = estado.telaAnterior;
+
+  const Tela destino =
+      (topoPilhaNavegacao > 0) ? pilhaNavegacao[--topoPilhaNavegacao] : Tela::MenuPrincipal;
+  Serial.printf("[ESTADO] Pilha de navegacao: profundidade=%u\n",
+                static_cast<unsigned>(topoPilhaNavegacao));
+
+  Serial.printf("[ESTADO] Tela: %s -> %s\n", nomeTela(estado.telaAtual), nomeTela(destino));
+  estado.telaAtual = destino;
   estado.indiceSelecionado = 0;
   estado.offsetRolagem = 0;
   edicaoValor.emEdicao = false;
@@ -1096,6 +1150,8 @@ void tratarConfigCanaisTodos(const Command& cmd) {
 }
 
 void confirmarConfigTodosSim() {
+  Serial.printf("[DIAG][MENU] confirmarConfigTodosSim: chamando canais::definirTodos(%u)\n",
+                static_cast<unsigned>(modoPendente));
   canais::definirTodos(modoPendente);
   navegarPara(Tela::ConfigCanais);
 }
@@ -1154,6 +1210,8 @@ void tratarConfigCanaisIndividualEditar(const Command& cmd) {
 }
 
 void confirmarConfigIndividualSim() {
+  Serial.printf("[DIAG][MENU] confirmarConfigIndividualSim: canais::definirModo(canal=%u, modo=%u)\n",
+                static_cast<unsigned>(canalSelecionado), static_cast<unsigned>(modoPendente));
   canais::definirModo(canalSelecionado, modoPendente);
   navegarPara(Tela::ConfigCanaisIndividualLista);
 }
@@ -1722,7 +1780,7 @@ void atualizarBoot() {
       // equipamento está pronto (silenciosa se volume==0).
       ihm::beep(200);
       estado.telaAtual = Tela::MenuPrincipal;
-      estado.telaAnterior = Tela::MenuPrincipal;
+      topoPilhaNavegacao = 0;  // pilha vazia: MenuPrincipal é a raiz da navegação
       estado.indiceSelecionado = 0;
       precisaRedesenhar = true;
       break;

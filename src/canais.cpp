@@ -26,18 +26,59 @@ const char* chavePreferencia(uint8_t indice0based, char* buffer, size_t tamanho)
   return buffer;
 }
 
+// Grava "chave"=valor e confere lendo de volta na mesma chamada. Retorna
+// true só se a gravação E a conferência baterem.
+bool gravarEConferir(const char* chave, uint8_t valor) {
+  const size_t bytesGravados = prefs.putUChar(chave, valor);
+  const uint8_t confirmado = prefs.getUChar(chave, 0xFF);
+  const bool ok = (bytesGravados == sizeof(uint8_t)) && (confirmado == valor);
+  Serial.printf(
+      "[DIAG][CANAIS] gravarEConferir: chave=\"%s\" valor=%u bytesGravados=%u confirmado=%u -> %s\n",
+      chave, static_cast<unsigned>(valor), static_cast<unsigned>(bytesGravados),
+      static_cast<unsigned>(confirmado), ok ? "OK" : "FALHOU");
+  return ok;
+}
+
+// Causa suspeita da configuração não sobreviver a um desligamento (mesmo
+// com bytesGravados aparentemente OK): o handle NVS/Preferences fica
+// aberto pela sessão inteira (desde init()) e recebe várias leituras/
+// gravações ao longo do tempo — há relatos conhecidos do ESP32 de escritas
+// num handle "usado" há muito tempo não sobreviverem de fato a um reset,
+// mesmo reportando sucesso. Por isso: fecha e reabre a NVS imediatamente
+// antes de CADA gravação de canal, forçando uma sessão nova por escrita
+// (equivalente ao caso que já funcionava: a 1ª escrita logo após abrir a
+// NVS pela primeira vez). Se mesmo assim a conferência falhar, tenta mais
+// uma vez.
 void salvarCanal(uint8_t indice0based) {
   char chave[8];
   chavePreferencia(indice0based, chave, sizeof(chave));
   const uint8_t valor = static_cast<uint8_t>(configuracaoCanais[indice0based].edgeMode);
-  // Diagnóstico temporário (queixa: "configurar todos os canais só
-  // salva/aplica no canal 1") — putUChar() devolve a quantidade de bytes
-  // gravados; 0 indica falha silenciosa da NVS para aquela chave
-  // específica.
-  const size_t bytesGravados = prefs.putUChar(chave, valor);
-  Serial.printf("[DIAG][CANAIS] salvarCanal: chave=\"%s\" (canal %u) valor=%u bytesGravados=%u\n", chave,
-                static_cast<unsigned>(indice0based + 1), static_cast<unsigned>(valor),
-                static_cast<unsigned>(bytesGravados));
+
+  prefs.end();
+  prefs.begin(NAMESPACE_PREFS, false);
+
+  if (!gravarEConferir(chave, valor)) {
+    Serial.printf("[DIAG][CANAIS] canal %u: gravacao nao confirmada, reabrindo NVS e tentando de novo\n",
+                  static_cast<unsigned>(indice0based + 1));
+    prefs.end();
+    prefs.begin(NAMESPACE_PREFS, false);
+    if (!gravarEConferir(chave, valor)) {
+      Serial.printf("[DIAG][CANAIS] canal %u: segunda tentativa tambem falhou\n",
+                    static_cast<unsigned>(indice0based + 1));
+    }
+  }
+}
+
+// Log de resumo, legível de relance (diferente das linhas [DIAG] por
+// chave/byte acima) — chamado ao final de init() e após qualquer alteração
+// de configuração, para conferir rapidamente o estado de todos os canais
+// de uma vez só.
+void logConfiguracaoAtual(const char* contexto) {
+  Serial.printf("[CANAIS] Configuracao atual (%s):", contexto);
+  for (uint8_t i = 0; i < NUM_CHANNELS; i++) {
+    Serial.printf(" C%u=%s", static_cast<unsigned>(i + 1), nomeModo(configuracaoCanais[i].edgeMode));
+  }
+  Serial.println();
 }
 
 }  // namespace
@@ -55,6 +96,7 @@ void init() {
     Serial.println("[DIAG][CANAIS] Esquema divergente/ausente - aplicando padrao (restaurarPadrao)");
     restaurarPadrao();
     prefs.putUChar("ver", VERSAO_ESQUEMA);
+    logConfiguracaoAtual("apos boot, esquema novo");
     return;
   }
 
@@ -67,6 +109,7 @@ void init() {
                   static_cast<unsigned>(i + 1), static_cast<unsigned>(bruto),
                   static_cast<unsigned>(configuracaoCanais[i].edgeMode));
   }
+  logConfiguracaoAtual("apos boot");
 }
 
 EdgeMode obterModo(uint8_t canal1based) {
@@ -79,6 +122,7 @@ void definirModo(uint8_t canal1based, EdgeMode modo) {
   const uint8_t indice0based = canal1based - 1;
   configuracaoCanais[indice0based].edgeMode = modo;
   salvarCanal(indice0based);
+  logConfiguracaoAtual("apos configurar 1 canal");
 }
 
 void definirTodos(EdgeMode modo) {
@@ -92,6 +136,7 @@ void definirTodos(EdgeMode modo) {
     Serial.printf("[DIAG][CANAIS] pos-definirTodos: RAM canal %u = %u\n", static_cast<unsigned>(i + 1),
                   static_cast<unsigned>(configuracaoCanais[i].edgeMode));
   }
+  logConfiguracaoAtual("apos configurar todos os canais");
 }
 
 void restaurarPadrao() { definirTodos(EdgeMode::Both); }

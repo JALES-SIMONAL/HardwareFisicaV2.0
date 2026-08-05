@@ -63,9 +63,18 @@ void testarFiltroBordas() {
 // itens 4-7)
 // ---------------------------------------------------------------------
 void testarConfiguracaoCanais() {
-  // Preserva o estado atual do canal 1 para não deixar efeito colateral
-  // permanente do autoteste na configuração salva pelo usuário.
-  const EdgeMode modoOriginalCanal1 = canais::obterModo(1);
+  // Preserva o estado atual de TODOS os canais para não deixar efeito
+  // colateral permanente do autoteste na configuração salva pelo usuário.
+  // BUG REAL já observado em campo: esta função só salvava/restaurava o
+  // canal 1 — os canais 2..NUM_CHANNELS ficavam permanentemente
+  // sobrescritos com EdgeMode::Both (o valor aplicado por
+  // canais::restaurarPadrao() abaixo) toda vez que o firmware rodava com
+  // ENABLE_FIRMWARE_SELF_TESTS=1, apagando a configuração real do usuário
+  // a cada boot.
+  EdgeMode modosOriginais[NUM_CHANNELS];
+  for (uint8_t c = 1; c <= NUM_CHANNELS; c++) {
+    modosOriginais[c - 1] = canais::obterModo(c);
+  }
 
   canais::definirTodos(EdgeMode::Rising);
   bool todosRising = true;
@@ -97,8 +106,11 @@ void testarConfiguracaoCanais() {
   checar(canais::obterModo(1) == EdgeMode::Both,
          "definirModo com indice invalido: nao corrompe canal 1");
 
-  // Restaura o modo original do canal 1 (evita efeito colateral do teste).
-  canais::definirModo(1, modoOriginalCanal1);
+  // Restaura o modo original de TODOS os canais (evita efeito colateral
+  // permanente do teste na configuração real do usuário).
+  for (uint8_t c = 1; c <= NUM_CHANNELS; c++) {
+    canais::definirModo(c, modosOriginais[c - 1]);
+  }
 }
 
 // ---------------------------------------------------------------------

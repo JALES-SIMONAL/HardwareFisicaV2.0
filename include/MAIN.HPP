@@ -1,4 +1,18 @@
-// Pinos sugeridos do lado esquerdo (ESP32)
+// Pinagem oficial da PCB (ESP32 DOIT DevKit V1, 38 pinos). Os valores abaixo
+// seguem a ordem física dos pinos do módulo (coluna esquerda: 34-35-32-33-
+// 25-26-27-14-12-GND-13...; coluna direita: ...23-22-TX0-RX0-21-GND-19-18-5-
+// 17-16-4-0-2-15...) de propósito, para que o roteamento das trilhas na
+// placa fique o mais simples possível — cada sinal fica no pino físico mais
+// próximo do seu vizinho lógico no conector.
+//
+// Duas alterações em relação à lista original do hardware (ver histórico):
+// - NeoPixel: GPIO34 é SOMENTE ENTRADA no ESP32 (sem driver de saída, não
+//   tem como gerar o sinal WS2812) — mantido no GPIO21 (pino já usado e
+//   testado antes).
+// - Buzzer: não estava na lista original e GPIO27 já é o canal 6 — colocado
+//   no GPIO13, pino livre logo depois de "key" (14) na mesma coluna física
+//   dos canais/indicadores (GPIO12, entre eles, é de strapping e fica de
+//   propósito sem uso).
 #pragma once
 
 #include <Arduino.h>
@@ -8,9 +22,9 @@
 //velocidade comunicação serial
 constexpr unsigned long SERIAL_BAUD_RATE = 115200;
 // pinos do encoder rotativo
-constexpr uint8_t ENC_S1_PIN = 32;
-constexpr uint8_t ENC_S2_PIN = 33;
-constexpr uint8_t ENC_KEY_PIN = 25;
+constexpr uint8_t ENC_S1_PIN = 2;
+constexpr uint8_t ENC_S2_PIN = 15;
+constexpr uint8_t ENC_KEY_PIN = 14;
 
 // pino físico dos LEDs endereçáveis (NeoPixel)
 constexpr uint8_t PIN_NEO = 21;
@@ -26,23 +40,23 @@ constexpr uint16_t NUM_LEDS = 6;
 #endif
 
 #ifndef TFT_SCLK
-#define TFT_SCLK 18
+#define TFT_SCLK 22
 #endif
 
 #ifndef TFT_CS
-#define TFT_CS 5
+#define TFT_CS 18
 #endif
 
 #ifndef TFT_DC
-#define TFT_DC 16
+#define TFT_DC 17
 #endif
 
 #ifndef TFT_RST
-#define TFT_RST 17
+#define TFT_RST 16
 #endif
 
 #ifndef TFT_BL
-#define TFT_BL 22
+#define TFT_BL 4
 #endif
 
 // ---------------------------------------------------------------------
@@ -51,26 +65,18 @@ constexpr uint16_t NUM_LEDS = 6;
 // Quantidade de canais de sensores suportados pelo equipamento.
 constexpr uint8_t NUM_CHANNELS = 6;
 
-// ATENCAO: PINAGEM A CONFIRMAR.
-// Nao existe, no repositorio, um documento de conexoes/pinagem de hardware
-// nem diagrama funcional para os canais de sensores. Os GPIOs abaixo sao
-// placeholders plausiveis (livres na esp32doit-devkit-v1, evitando pinos de
-// strapping/flash e os pinos ja usados pelo encoder/NeoPixel/TFT) para que o
-// firmware compile e fique estruturalmente pronto. Ajuste os valores reais
-// aqui antes de qualquer upload para o hardware.
-constexpr uint8_t CHANNEL_PINS[NUM_CHANNELS] = {34, 35, 36, 39, 4, 13};
+// Pinagem oficial da PCB (canal 1..6, nesta ordem).
+constexpr uint8_t CHANNEL_PINS[NUM_CHANNELS] = {35, 32, 33, 25, 26, 27};
 
 // ---------------------------------------------------------------------
 // Cartao microSD (compartilha o barramento SPI do TFT: MOSI/MISO/SCK)
 // ---------------------------------------------------------------------
-// ATENCAO: PINAGEM A CONFIRMAR (mesmo motivo do bloco de canais acima).
-constexpr uint8_t SD_CS_PIN = 15;
+constexpr uint8_t SD_CS_PIN = 5;
 
 // ---------------------------------------------------------------------
 // Buzzer
 // ---------------------------------------------------------------------
-// ATENCAO: PINAGEM A CONFIRMAR (mesmo motivo do bloco de canais acima).
-constexpr uint8_t BUZZER_PIN = 27;
+constexpr uint8_t BUZZER_PIN = 13;
 
 // ---------------------------------------------------------------------
 // Filas, buffers e limites configuraveis

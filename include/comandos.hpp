@@ -36,7 +36,9 @@ enum class CommandType : uint8_t {
   SelectFile,
   RenameFile,
   DeleteFile,
-  Reconnect
+  Reconnect,
+  ListFiles,
+  LoadRepetition
 };
 
 enum class Origem : uint8_t { Local, Bluetooth };
@@ -48,6 +50,7 @@ struct Command {
   uint8_t canal = 0;        // índice do canal (1..NUM_CHANNELS) quando aplicável
   EdgeMode modo = EdgeMode::Both;
   char texto[24] = "";      // nome de arquivo/valor textual quando aplicável
+  char texto2[24] = "";     // segundo texto (só RenameFile: nome novo)
 };
 
 }  // namespace comandos

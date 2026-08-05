@@ -9,6 +9,8 @@
 #include <freertos/semphr.h>
 
 #include "MAIN.HPP"
+#include "analise_dados.hpp"
+#include "aquisicao.hpp"
 #include "canais.hpp"
 #include "comandos.hpp"
 #include "configuracoes.hpp"
@@ -50,6 +52,8 @@ volatile uint16_t connHandleAtual = BLE_HS_CONN_HANDLE_NONE;
 volatile bool clienteConectado = false;
 bool clienteConectadoAnterior = false;
 unsigned long ultimaPublicacaoEstadoMs = 0;
+unsigned long ultimaPublicacaoTesteCanaisMs = 0;
+constexpr uint32_t INTERVALO_PUBLICACAO_TESTE_CANAIS_MS = 300;
 
 // Fila FreeRTOS: onWrite() (callback disparada pela tarefa própria da pilha
 // NimBLE) só acumula bytes e enfileira linhas completas — quem de fato
@@ -157,6 +161,19 @@ void processarLinha(char* linha) {
   } else if (std::strcmp(acao, "reconnect") == 0) {
     reconectar();
     return;
+  } else if (std::strcmp(acao, "list_files") == 0) {
+    cmd.tipo = comandos::CommandType::ListFiles;
+  } else if (std::strcmp(acao, "rename_file") == 0) {
+    cmd.tipo = comandos::CommandType::RenameFile;
+    std::strncpy(cmd.texto, doc["from"] | "", sizeof(cmd.texto) - 1);
+    std::strncpy(cmd.texto2, doc["to"] | "", sizeof(cmd.texto2) - 1);
+  } else if (std::strcmp(acao, "delete_file") == 0) {
+    cmd.tipo = comandos::CommandType::DeleteFile;
+    std::strncpy(cmd.texto, doc["nome"] | "", sizeof(cmd.texto) - 1);
+  } else if (std::strcmp(acao, "load_repetition") == 0) {
+    cmd.tipo = comandos::CommandType::LoadRepetition;
+    std::strncpy(cmd.texto, doc["arquivo"] | "", sizeof(cmd.texto) - 1);
+    cmd.valor = doc["repeticao"] | 0;
   } else {
     return;
   }
@@ -241,6 +258,7 @@ void loop() {
   const bool conectadoAgora = clienteConectado;
   if (conectadoAgora && !clienteConectadoAnterior) {
     Serial.println("[BT] Cliente conectado");
+    publicarInfoDispositivo();
     publicarEstado();
     publicarConfiguracaoCanais();
   } else if (!conectadoAgora && clienteConectadoAnterior) {
@@ -263,6 +281,10 @@ void loop() {
   if (agora - ultimaPublicacaoEstadoMs >= INTERVALO_PUBLICACAO_ESTADO_MS) {
     ultimaPublicacaoEstadoMs = agora;
     publicarEstado();
+  }
+  if (agora - ultimaPublicacaoTesteCanaisMs >= INTERVALO_PUBLICACAO_TESTE_CANAIS_MS) {
+    ultimaPublicacaoTesteCanaisMs = agora;
+    publicarTesteCanais();
   }
 }
 
@@ -299,8 +321,93 @@ void publicarEstado() {
   doc["repeticoes_totais"] = experimentos::totalRepeticoes();
   doc["eventos_repeticao"] = experimentos::eventosNaRepeticaoAtual();
   doc["num_canais"] = NUM_CHANNELS;
+  doc["tempo_decorrido_s"] = static_cast<int64_t>(experimentos::tempoDecorridoUs() / 1000000);
+  doc["sd_usado_kb"] = static_cast<uint32_t>(armazenamento::espacoUsadoBytes() / 1024);
+  doc["sd_total_kb"] = static_cast<uint32_t>(armazenamento::espacoTotalBytes() / 1024);
+
+  char payload[320];
+  const size_t tamanho = serializeJson(doc, payload, sizeof(payload));
+  enviarLinha(payload, tamanho);
+}
+
+void publicarInfoDispositivo() {
+  TravaBt trava;
+  if (!clienteConectado) return;
+
+  JsonDocument doc;
+  doc["topico"] = "info";
+  doc["equipamento"] = configuracoes::NOME_EQUIPAMENTO;
+  doc["versao_firmware"] = configuracoes::VERSAO_FIRMWARE;
+  doc["autor"] = configuracoes::AUTOR;
+  doc["device_id"] = deviceIdBuffer;
+  doc["mac"] = enderecoMac();
+  doc["manual_url"] = configuracoes::MANUAL_URL;
 
   char payload[256];
+  const size_t tamanho = serializeJson(doc, payload, sizeof(payload));
+  enviarLinha(payload, tamanho);
+}
+
+void publicarTesteCanais() {
+  TravaBt trava;
+  if (!clienteConectado) return;
+
+  JsonDocument doc;
+  doc["topico"] = "teste_canais";
+  JsonArray canaisArray = doc["canais"].to<JsonArray>();
+  for (uint8_t i = 1; i <= NUM_CHANNELS; i++) {
+    JsonObject c = canaisArray.add<JsonObject>();
+    c["canal"] = i;
+    c["nivel"] = aquisicao::nivelAtual(i) ? "H" : "L";
+    c["mudancas"] = aquisicao::quantidadeMudancas(i);
+  }
+
+  char payload[320];
+  const size_t tamanho = serializeJson(doc, payload, sizeof(payload));
+  enviarLinha(payload, tamanho);
+}
+
+void publicarListaArquivos() {
+  TravaBt trava;
+  if (!clienteConectado) return;
+
+  constexpr uint16_t MAX_ARQUIVOS_LISTA_BT = 20;
+  armazenamento::InfoArquivo arquivos[MAX_ARQUIVOS_LISTA_BT];
+  const uint16_t quantidade = armazenamento::listarArquivos(arquivos, MAX_ARQUIVOS_LISTA_BT);
+
+  JsonDocument doc;
+  doc["topico"] = "files";
+  JsonArray arquivosArray = doc["arquivos"].to<JsonArray>();
+  for (uint16_t i = 0; i < quantidade; i++) {
+    JsonObject a = arquivosArray.add<JsonObject>();
+    a["nome"] = arquivos[i].nome;
+    a["tamanho"] = arquivos[i].tamanhoBytes;
+  }
+
+  char payload[1024];
+  const size_t tamanho = serializeJson(doc, payload, sizeof(payload));
+  enviarLinha(payload, tamanho);
+}
+
+void publicarEventosAnalise() {
+  TravaBt trava;
+  if (!clienteConectado) return;
+
+  const uint8_t quantidade = analise_dados::quantidadeEventosCarregados();
+
+  JsonDocument doc;
+  doc["topico"] = "analise_eventos";
+  JsonArray eventosArray = doc["eventos"].to<JsonArray>();
+  for (uint8_t i = 0; i < quantidade; i++) {
+    const analise_dados::EventoLido& ev = analise_dados::evento(i);
+    JsonObject e = eventosArray.add<JsonObject>();
+    e["canal"] = ev.canal;
+    const char estadoStr[2] = {ev.estado, '\0'};
+    e["estado"] = estadoStr;
+    e["tempo_us"] = static_cast<long long>(ev.tempoUs);
+  }
+
+  char payload[2048];
   const size_t tamanho = serializeJson(doc, payload, sizeof(payload));
   enviarLinha(payload, tamanho);
 }

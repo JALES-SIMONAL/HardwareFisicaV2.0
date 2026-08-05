@@ -1894,6 +1894,24 @@ void processarComando(const Command& cmd, Origem /*origem*/) {
       experimentos::finalizarRepeticaoAtual();
       precisaRedesenhar = true;
       return;
+    case CommandType::ListFiles:
+      bluetooth_app::publicarListaArquivos();
+      return;
+    case CommandType::RenameFile: {
+      char nomeComExtensao[TAMANHO_MAX_NOME_ARQUIVO + 5];
+      snprintf(nomeComExtensao, sizeof(nomeComExtensao), "%s.csv", cmd.texto2);
+      armazenamento::renomearArquivo(cmd.texto, nomeComExtensao);
+      bluetooth_app::publicarListaArquivos();
+      return;
+    }
+    case CommandType::DeleteFile:
+      armazenamento::excluirArquivo(cmd.texto);
+      bluetooth_app::publicarListaArquivos();
+      return;
+    case CommandType::LoadRepetition:
+      analise_dados::carregarRepeticao(cmd.texto, static_cast<uint16_t>(cmd.valor));
+      bluetooth_app::publicarEventosAnalise();
+      return;
     default:
       break;
   }

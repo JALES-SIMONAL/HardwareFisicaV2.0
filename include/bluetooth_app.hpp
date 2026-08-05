@@ -42,6 +42,25 @@ void publicarEvento(uint8_t canal1based, char estado, int64_t tempoRelativoUs);
 void publicarConfiguracaoCanais();
 void publicarResultadoAnalise(int64_t deltaTUs, float velocidadeMs);
 
+// Publicada uma única vez, logo que um app conecta (dados estáticos do
+// equipamento: nome, versão, autor, MAC, device id, URL do manual) —
+// equivalente aos campos fixos da tela "Sobre".
+void publicarInfoDispositivo();
+
+// Publicada periodicamente (INTERVALO_PUBLICACAO_TESTE_CANAIS_MS) enquanto
+// conectado, independente da tela atual no display — nível elétrico e
+// contagem de mudanças de cada canal, equivalente à tela "Teste de canais".
+void publicarTesteCanais();
+
+// Publicada sob demanda em resposta à ação "list_files" (equivalente às
+// telas "Gerenciamento de arquivos"/"Selecionar arquivo" da análise).
+void publicarListaArquivos();
+
+// Publicada sob demanda em resposta à ação "load_repetition" (equivalente à
+// tela "Eventos" da análise) — array vazio quando a repetição não existe ou
+// não tem eventos.
+void publicarEventosAnalise();
+
 // Derruba a conexão BLE atual (se houver), forçando o app a reconectar —
 // usado pelo item "Reconectar" da tela "Conexao com app".
 void reconectar();

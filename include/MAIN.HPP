@@ -68,6 +68,17 @@ constexpr uint8_t NUM_CHANNELS = 6;
 // Pinagem oficial da PCB (canal 1..6, nesta ordem).
 constexpr uint8_t CHANNEL_PINS[NUM_CHANNELS] = {35, 32, 33, 25, 26, 27};
 
+// Resistor de pull interno do ESP32 usado em TODOS os pinos de canal, para
+// estabilizar o nível quando não há sensor conectado (um pino totalmente
+// flutuante capta ruído elétrico e gera transições falsas na interrupção
+// CHANGE). true = pull-up (nível ocioso HIGH — use quando o sensor aciona
+// puxando a linha para GND, o mais comum em chaves/fototransistores).
+// false = pull-down (nível ocioso LOW — use quando o sensor aciona
+// puxando a linha para VCC). Ajuste conforme a fiação real dos sensores;
+// não tem efeito perceptível num sensor que já aciona ativamente os dois
+// níveis (push-pull), só protege o caso de canal sem sensor conectado.
+constexpr bool CHANNEL_PULLUP = true;
+
 // ---------------------------------------------------------------------
 // Cartao microSD (compartilha o barramento SPI do TFT: MOSI/MISO/SCK)
 // ---------------------------------------------------------------------

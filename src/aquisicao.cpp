@@ -27,16 +27,33 @@ QueueHandle_t filaEventosBrutos = nullptr;
 volatile bool niveisAtuais[NUM_CHANNELS] = {};
 volatile uint32_t contadoresMudancas[NUM_CHANNELS] = {};
 
+// Timestamp (esp_timer_get_time()) da última transição ACEITA de cada
+// canal — usado só para o filtro de debounce abaixo, não confundir com
+// niveisAtuais/contadoresMudancas (que refletem o nível bruto do pino).
+volatile int64_t ultimoEventoAceitoUs[NUM_CHANNELS] = {};
+
 CallbackEventoValido callbackEventoValido = nullptr;
 
 void IRAM_ATTR isrCanal(void* arg) {
   const uint8_t indice0based = static_cast<uint8_t>(reinterpret_cast<uintptr_t>(arg));
+  const int64_t tempoUs = esp_timer_get_time();
+
+  // Debounce: ignora qualquer transição que aconteça a menos de
+  // SENSOR_DEBOUNCE_US da última transição aceita neste canal — filtra
+  // ruído elétrico rápido/bounce mecânico sem exigir um timer separado.
+  // Deliberadamente simples (só compara timestamps) para manter a ISR
+  // curta; uma transição real e uma de ruído próximas no tempo demais
+  // para o sensor em uso podem exigir ajustar SENSOR_DEBOUNCE_US.
+  if ((tempoUs - ultimoEventoAceitoUs[indice0based]) < static_cast<int64_t>(SENSOR_DEBOUNCE_US)) {
+    return;
+  }
+
   const bool estadoAnterior = niveisAtuais[indice0based];
   const bool estadoNovo = digitalRead(CHANNEL_PINS[indice0based]) == HIGH;
-  const int64_t tempoUs = esp_timer_get_time();
 
   niveisAtuais[indice0based] = estadoNovo;
   contadoresMudancas[indice0based]++;
+  ultimoEventoAceitoUs[indice0based] = tempoUs;
 
   RawEdgeEvent evento{indice0based, estadoAnterior, estadoNovo, tempoUs};
 
@@ -51,9 +68,15 @@ void init() {
   filaEventosBrutos = xQueueCreate(EVENT_QUEUE_LEN, sizeof(RawEdgeEvent));
 
   for (uint8_t i = 0; i < NUM_CHANNELS; i++) {
-    pinMode(CHANNEL_PINS[i], INPUT);
+    // Pull interno (ver CHANNEL_PULLUP em MAIN.HPP): estabiliza o nível
+    // ocioso quando não há sensor conectado a este canal, em vez de
+    // deixar o pino totalmente flutuante (sujeito a ruído/transições
+    // falsas). Não atrapalha um sensor que já aciona ativamente os dois
+    // níveis — é um resistor fraco, facilmente sobrescrito.
+    pinMode(CHANNEL_PINS[i], CHANNEL_PULLUP ? INPUT_PULLUP : INPUT_PULLDOWN);
     niveisAtuais[i] = (digitalRead(CHANNEL_PINS[i]) == HIGH);
     contadoresMudancas[i] = 0;
+    ultimoEventoAceitoUs[i] = 0;
     attachInterruptArg(CHANNEL_PINS[i], isrCanal,
                         reinterpret_cast<void*>(static_cast<uintptr_t>(i)), CHANGE);
   }

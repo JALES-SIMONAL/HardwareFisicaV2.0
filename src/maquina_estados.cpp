@@ -1868,12 +1868,19 @@ void processarComando(const Command& cmd, Origem /*origem*/) {
       return;
     case CommandType::SetChannelMode:
       canais::definirModo(cmd.canal, cmd.modo);
+      // Sem isto, o app aplicava a mudança de verdade no firmware (NVS/RAM)
+      // mas continuava mostrando a config antiga: "channels" só era
+      // publicado uma vez, no momento da conexão — a tela de config.
+      // individual/todos do app lê exclusivamente desse tópico.
+      bluetooth_app::publicarConfiguracaoCanais();
       return;
     case CommandType::SetAllChannelsMode:
       canais::definirTodos(cmd.modo);
+      bluetooth_app::publicarConfiguracaoCanais();
       return;
     case CommandType::RestoreChannelDefaults:
       canais::restaurarPadrao();
+      bluetooth_app::publicarConfiguracaoCanais();
       return;
     case CommandType::StartExperiment:
       Serial.println("[EXPERIMENTO] Iniciando experimento (comando Bluetooth)");

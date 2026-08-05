@@ -1865,6 +1865,12 @@ void processarComando(const Command& cmd, Origem /*origem*/) {
     case CommandType::SetOperationMode:
       configuracoes::definirModoOperacao(cmd.valor == 1 ? configuracoes::ModoOperacao::App
                                                           : configuracoes::ModoOperacao::Hardware);
+      // Redesenha sempre (não só quando a tela local é ModoOperacao/Sobre):
+      // é barato (redesenharTelaAtual() sempre busca os dados atuais de
+      // novo) e garante que a tela física fique sincronizada com qualquer
+      // mudança feita pelo app, não só quando o usuário local por acaso
+      // está na tela exata que mostra aquele dado.
+      precisaRedesenhar = true;
       return;
     case CommandType::SetChannelMode:
       canais::definirModo(cmd.canal, cmd.modo);
@@ -1873,14 +1879,17 @@ void processarComando(const Command& cmd, Origem /*origem*/) {
       // publicado uma vez, no momento da conexão — a tela de config.
       // individual/todos do app lê exclusivamente desse tópico.
       bluetooth_app::publicarConfiguracaoCanais();
+      precisaRedesenhar = true;
       return;
     case CommandType::SetAllChannelsMode:
       canais::definirTodos(cmd.modo);
       bluetooth_app::publicarConfiguracaoCanais();
+      precisaRedesenhar = true;
       return;
     case CommandType::RestoreChannelDefaults:
       canais::restaurarPadrao();
       bluetooth_app::publicarConfiguracaoCanais();
+      precisaRedesenhar = true;
       return;
     case CommandType::StartExperiment:
       Serial.println("[EXPERIMENTO] Iniciando experimento (comando Bluetooth)");
@@ -1909,15 +1918,18 @@ void processarComando(const Command& cmd, Origem /*origem*/) {
       snprintf(nomeComExtensao, sizeof(nomeComExtensao), "%s.csv", cmd.texto2);
       armazenamento::renomearArquivo(cmd.texto, nomeComExtensao);
       bluetooth_app::publicarListaArquivos();
+      precisaRedesenhar = true;
       return;
     }
     case CommandType::DeleteFile:
       armazenamento::excluirArquivo(cmd.texto);
       bluetooth_app::publicarListaArquivos();
+      precisaRedesenhar = true;
       return;
     case CommandType::LoadRepetition:
       analise_dados::carregarRepeticao(cmd.texto, static_cast<uint16_t>(cmd.valor));
       bluetooth_app::publicarEventosAnalise();
+      precisaRedesenhar = true;
       return;
     default:
       break;

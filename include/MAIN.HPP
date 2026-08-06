@@ -77,7 +77,7 @@ constexpr uint8_t CHANNEL_PINS[NUM_CHANNELS] = {35, 32, 33, 25, 26, 27};
 // puxando a linha para VCC). Ajuste conforme a fiação real dos sensores;
 // não tem efeito perceptível num sensor que já aciona ativamente os dois
 // níveis (push-pull), só protege o caso de canal sem sensor conectado.
-constexpr bool CHANNEL_PULLUP = true;
+constexpr bool CHANNEL_PULLUP = false;
 
 // ---------------------------------------------------------------------
 // Cartao microSD (compartilha o barramento SPI do TFT: MOSI/MISO/SCK)

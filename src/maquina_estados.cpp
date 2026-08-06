@@ -261,11 +261,12 @@ const char* tituloOpcaoMenu(Tela tela, uint8_t indice) {
 }
 
 // Editor de texto genérico (usado para salvar um experimento novo, renomear
-// um arquivo existente e renomear o dispositivo BLE). Alfabeto: [FIM]
-// primeiro (permite terminar o nome antes de preencher os caracteres
-// disponíveis), depois espaço, letras A-Z e dígitos 0-9.
-constexpr char ALFABETO_NOME[] = "\x01 ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+// um arquivo existente e renomear o dispositivo BLE). Alfabeto: [FIM] e
+// [APAGAR] primeiro (permitem terminar ou apagar o último caractere a
+// qualquer momento), depois espaço, letras A-Z e dígitos 0-9.
+constexpr char ALFABETO_NOME[] = "\x01\x02 ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
 constexpr uint8_t MARCADOR_FIM_INDICE = 0;
+constexpr uint8_t MARCADOR_APAGAR_INDICE = 1;
 constexpr uint8_t QTD_ALFABETO_NOME = sizeof(ALFABETO_NOME) - 1;
 // 20 cobre tanto nomes de arquivo quanto o nome BLE (bluetooth_app::
 // TAMANHO_MAX_NOME_DISPOSITIVO_BT), que reaproveita este mesmo editor.
@@ -671,13 +672,27 @@ void tratarEdicaoNomeArquivo(const Command& cmd) {
       precisaRedesenhar = true;
       break;
     case CommandType::Confirm: {
+      if (nomeArquivo.indiceAlfabetoAtual == MARCADOR_APAGAR_INDICE) {
+        // Apaga o último caractere (se houver) e permanece no próprio
+        // símbolo [APAGAR] — permite apagar vários seguidos sem precisar
+        // navegar de novo até ele a cada vez.
+        if (nomeArquivo.posicaoCursor > 0) {
+          nomeArquivo.posicaoCursor--;
+          nomeArquivo.buffer[nomeArquivo.posicaoCursor] = '\0';
+          precisaRedesenhar = true;
+        }
+        break;
+      }
+
       const bool ehFim = (nomeArquivo.indiceAlfabetoAtual == MARCADOR_FIM_INDICE);
 
       if (!ehFim && nomeArquivo.posicaoCursor < TAMANHO_MAX_NOME_ARQUIVO) {
         nomeArquivo.buffer[nomeArquivo.posicaoCursor] = ALFABETO_NOME[nomeArquivo.indiceAlfabetoAtual];
         nomeArquivo.posicaoCursor++;
         nomeArquivo.buffer[nomeArquivo.posicaoCursor] = '\0';
-        nomeArquivo.indiceAlfabetoAtual = 0;
+        // Mantém o cursor no mesmo símbolo em vez de voltar pro [OK] —
+        // útil para digitar o mesmo caractere (ou um vizinho na grade)
+        // várias vezes seguidas sem precisar navegar de novo.
         precisaRedesenhar = true;
       }
 
@@ -1513,21 +1528,37 @@ void redesenharExperimentoExecucao() {
   ihm::desenharListaMenu(titulo, itens, 2, estado.indiceSelecionado, 0);
 }
 
-void redesenharEdicaoNomeArquivo() {
-  char titulo[TAMANHO_MAX_NOME_ARQUIVO + 8];
-  snprintf(titulo, sizeof(titulo), "Nome: %s", nomeArquivo.buffer);
+// Rótulo curto (até 2 caracteres) por símbolo do alfabeto, para o teclado
+// em grade — construído uma única vez (os símbolos nunca mudam) e
+// reaproveitado a cada redesenho.
+const char* const* rotulosAlfabeto() {
+  static char buffers[QTD_ALFABETO_NOME][3];
+  static const char* rotulos[QTD_ALFABETO_NOME];
+  static bool preparado = false;
 
-  char caractereAtual[8];
-  if (nomeArquivo.indiceAlfabetoAtual == MARCADOR_FIM_INDICE) {
-    std::strcpy(caractereAtual, "[FIM]");
-  } else if (ALFABETO_NOME[nomeArquivo.indiceAlfabetoAtual] == ' ') {
-    std::strcpy(caractereAtual, "[esp]");
-  } else {
-    caractereAtual[0] = ALFABETO_NOME[nomeArquivo.indiceAlfabetoAtual];
-    caractereAtual[1] = '\0';
+  if (!preparado) {
+    for (uint8_t i = 0; i < QTD_ALFABETO_NOME; i++) {
+      if (i == MARCADOR_FIM_INDICE) {
+        std::strcpy(buffers[i], "OK");
+      } else if (i == MARCADOR_APAGAR_INDICE) {
+        std::strcpy(buffers[i], "<-");
+      } else if (ALFABETO_NOME[i] == ' ') {
+        std::strcpy(buffers[i], "_");
+      } else {
+        buffers[i][0] = ALFABETO_NOME[i];
+        buffers[i][1] = '\0';
+      }
+      rotulos[i] = buffers[i];
+    }
+    preparado = true;
   }
 
-  ihm::desenharMensagem(titulo, caractereAtual);
+  return rotulos;
+}
+
+void redesenharEdicaoNomeArquivo() {
+  ihm::desenharTecladoTexto(nomeArquivo.buffer, rotulosAlfabeto(), QTD_ALFABETO_NOME,
+                            nomeArquivo.indiceAlfabetoAtual);
 }
 
 void redesenharGerenciamentoArquivos() {

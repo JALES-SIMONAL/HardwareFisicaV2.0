@@ -2,6 +2,8 @@
 
 #include <algorithm>
 
+#include "MAIN.HPP"
+
 namespace layout {
 
 namespace {
@@ -40,8 +42,20 @@ int16_t uiHeight(int16_t valorReferencia) {
 }
 
 uint8_t uiFontSize(uint8_t tamanhoReferencia) {
-  int16_t escalado = static_cast<int16_t>(tamanhoReferencia * escalaMinima);
-  return static_cast<uint8_t>(escalado < 1 ? 1 : escalado);
+  // Arredondado em DUAS etapas, não numa conta só — a fonte (Adafruit GFX)
+  // só aceita tamanho inteiro (1x, 2x, 3x...), e nesta tela escalaMinima é
+  // 0.8 (a tela real é mais "achatada" que a resolução de referência).
+  // Multiplicar tudo de uma vez e arredondar só no final perde a fração do
+  // multiplicador: 1 * 0.8 * 1.5 = 1.2, que arredonda pra 1 de novo — sem
+  // efeito nenhum, mesmo com um multiplicador > 1. Arredondando o tamanho
+  // "natural" primeiro (sem o multiplicador) e só então aplicando
+  // UI_FONT_SIZE_MULTIPLICADOR sobre esse inteiro, 1.5 já produz uma
+  // mudança real (ex.: tamanho natural 1 * 1.5 = 1.5, que arredonda pra 2).
+  const int16_t base = static_cast<int16_t>(tamanhoReferencia * escalaMinima + 0.5f);
+  const int16_t baseClampado = base < 1 ? 1 : base;
+
+  const int16_t resultado = static_cast<int16_t>(baseClampado * UI_FONT_SIZE_MULTIPLICADOR + 0.5f);
+  return static_cast<uint8_t>(resultado < 1 ? 1 : resultado);
 }
 
 int16_t uiMargin() { return uiWidth(UI_MARGIN); }
@@ -50,11 +64,26 @@ int16_t uiCenterX() { return larguraTela / 2; }
 
 int16_t uiCenterY() { return alturaTela / 2; }
 
-int16_t uiHeaderHeight() { return uiHeight(UI_HEADER_HEIGHT); }
+// Cabeçalho/rodapé/espaçamento entre linhas: usam o MAIOR valor entre a
+// constante de referência escalada normalmente e um piso calculado a
+// partir do tamanho de fonte REAL (8px por unidade de textSize na fonte
+// padrão GFX, mais uma margem) — sem isto, aumentar
+// UI_FONT_SIZE_MULTIPLICADOR (MAIN.HPP) deixava o texto maior sem também
+// abrir mais espaço entre linhas/cabeçalho, sobrepondo o conteúdo.
+int16_t uiHeaderHeight() {
+  const int16_t alturaFonte = 8 * static_cast<int16_t>(uiFontSize(1));
+  return std::max<int16_t>(uiHeight(UI_HEADER_HEIGHT), alturaFonte + 8);
+}
 
-int16_t uiFooterHeight() { return uiHeight(UI_FOOTER_HEIGHT); }
+int16_t uiFooterHeight() {
+  const int16_t alturaFonte = 8 * static_cast<int16_t>(uiFontSize(1));
+  return std::max<int16_t>(uiHeight(UI_FOOTER_HEIGHT), alturaFonte + 6);
+}
 
-int16_t uiLineSpacing() { return uiHeight(UI_LINE_SPACING); }
+int16_t uiLineSpacing() {
+  const int16_t alturaFonte = 8 * static_cast<int16_t>(uiFontSize(1));
+  return std::max<int16_t>(uiHeight(UI_LINE_SPACING), alturaFonte + 4);
+}
 
 uint8_t uiItensVisiveis() {
   int16_t areaUtil = alturaTela - uiHeaderHeight() - uiFooterHeight();

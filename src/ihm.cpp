@@ -24,12 +24,14 @@ namespace {
 constexpr int16_t TFT_LARGURA_NATIVA = 128;
 constexpr int16_t TFT_ALTURA_NATIVA = 160;
 constexpr uint16_t COR_FUNDO = 0x0000;
-constexpr uint16_t COR_CABECALHO = 0x07E0;
+// Cabeçalho e seleção vêm de MAIN.HPP (UI_COR_CABECALHO/UI_COR_SELECIONADO)
+// — ajustáveis ali sem precisar mexer neste arquivo.
+constexpr uint16_t COR_CABECALHO = UI_COR_CABECALHO;
 constexpr uint16_t COR_TITULO = 0xFFFF;
 constexpr uint16_t COR_VALOR = 0xFFE0;
 constexpr uint16_t COR_RODAPE = 0xC618;
 constexpr uint16_t COR_TEXTO = 0xFFFF;
-constexpr uint16_t COR_SELECIONADO = 0x07E0;
+constexpr uint16_t COR_SELECIONADO = UI_COR_SELECIONADO;
 
 // PWM do brilho da tela (TFT_BL). Centraliza canal/frequência/resolução.
 constexpr uint8_t BRILHO_PWM_CANAL = 0;
@@ -151,6 +153,21 @@ bool textoMudou(const char* atual, const char* novoTexto) {
   return std::strcmp(atual, novoTexto) != 0;
 }
 
+// Desenha "texto" em (x,y) com o setTextSize()/setTextColor() já definidos
+// pelo chamador. Se UI_FONTE_NEGRITO (MAIN.HPP) estiver ativo, reimprime
+// 1px à direita por cima — "negrito" simulado por double-strike, já que a
+// fonte embutida da biblioteca de display não tem uma variante bold de
+// verdade. Centraliza esse comportamento aqui em vez de duplicar a lógica
+// em cada função desenharX()/escreverX() abaixo.
+void imprimirTexto(int16_t x, int16_t y, const char* texto) {
+  display->setCursor(x, y);
+  display->print(texto);
+  if (UI_FONTE_NEGRITO) {
+    display->setCursor(x + 1, y);
+    display->print(texto);
+  }
+}
+
 void limparFaixa(int16_t y, int16_t altura) {
   // display->width() (não TFT_LARGURA_NATIVA): o painel é usado rotacionado
   // (paisagem) e a largura nativa é menor que a largura real visível —
@@ -161,10 +178,9 @@ void limparFaixa(int16_t y, int16_t altura) {
 void desenharTextoFaixa(int16_t y, uint8_t tamanho, uint16_t cor,
 						 const char* texto) {
   limparFaixa(y, 24);
-  display->setCursor(10, y);
   display->setTextSize(tamanho);
   display->setTextColor(cor);
-  display->print(texto);
+  imprimirTexto(10, y, texto);
 }
 
 // Trunca "origem" em "destino" para caber em "larguraDisponivelPx", usando
@@ -349,10 +365,9 @@ void escreverTelaApp(const char* titulo, const char* valor, const char* rodape,
     telaApp.titulo[sizeof(telaApp.titulo) - 1] = '\0';
 
     display->fillRect(0, 0, display->width(), 28, COR_CABECALHO);
-    display->setCursor(10, 8);
     display->setTextSize(1);
     display->setTextColor(COR_TITULO);
-    display->print(telaApp.titulo);
+    imprimirTexto(10, 8, telaApp.titulo);
   }
 
   if (valor != nullptr && (forcarRedesenho || textoMudou(telaApp.valor, valor))) {
@@ -384,8 +399,7 @@ void escreverTextoTela(const char* texto, int16_t x, int16_t y, uint16_t cor,
 
   display->setTextColor(cor);
   display->setTextSize(tamanho);
-  display->setCursor(x, y);
-  display->print(texto);
+  imprimirTexto(x, y, texto);
   display->flush();
 }
 
@@ -479,8 +493,7 @@ void desenharCabecalhoRodape(const char* titulo, const char* rodape) {
                  largura - 2 * layout::uiMargin(), fonte);
     display->setTextSize(fonte);
     display->setTextColor(COR_TITULO);
-    display->setCursor(layout::uiMargin(), alturaCabecalho / 2 - 4);
-    display->print(bufferTitulo);
+    imprimirTexto(layout::uiMargin(), alturaCabecalho / 2 - 4, bufferTitulo);
   }
 
   if (rodape != nullptr) {
@@ -490,8 +503,7 @@ void desenharCabecalhoRodape(const char* titulo, const char* rodape) {
     display->fillRect(0, altura - alturaRodape, largura, alturaRodape, COR_FUNDO);
     display->setTextSize(fonte);
     display->setTextColor(COR_RODAPE);
-    display->setCursor(layout::uiMargin(), altura - alturaRodape + 2);
-    display->print(bufferRodape);
+    imprimirTexto(layout::uiMargin(), altura - alturaRodape + 2, bufferRodape);
   }
 }
 
@@ -532,8 +544,7 @@ void desenharListaMenu(const char* titulo, const char* const* itens, uint8_t qua
 
     display->setTextSize(fonte);
     display->setTextColor(selecionado ? COR_FUNDO : COR_TEXTO);
-    display->setCursor(layout::uiMargin(), y);
-    display->print(buffer);
+    imprimirTexto(layout::uiMargin(), y, buffer);
   }
 
   display->flush();
@@ -555,8 +566,7 @@ void desenharConfirmacao(const char* pergunta, uint8_t indiceSelecionado) {
                display->width() - 2 * layout::uiMargin(), fonte);
   display->setTextSize(fonte);
   display->setTextColor(COR_VALOR);
-  display->setCursor(layout::uiMargin(), yPergunta);
-  display->print(bufferPergunta);
+  imprimirTexto(layout::uiMargin(), yPergunta, bufferPergunta);
 
   static const char* const opcoes[2] = {"Sim", "Nao"};
   const int16_t yOpcoes = yPergunta + layout::uiLineSpacing() * 2;
@@ -568,8 +578,7 @@ void desenharConfirmacao(const char* pergunta, uint8_t indiceSelecionado) {
     }
     display->setTextSize(fonte);
     display->setTextColor(selecionado ? COR_FUNDO : COR_TEXTO);
-    display->setCursor(layout::uiMargin(), y);
-    display->print(opcoes[i]);
+    imprimirTexto(layout::uiMargin(), y, opcoes[i]);
   }
 
   display->flush();
@@ -595,8 +604,8 @@ void desenharValorEditavel(const char* titulo, int32_t valor, int32_t minimo,
   const int16_t larguraTexto = static_cast<int16_t>(std::strlen(textoValor) * 6 * fonteValor);
   display->setTextSize(fonteValor);
   display->setTextColor(COR_VALOR);
-  display->setCursor(layout::uiCenterX() - larguraTexto / 2, layout::uiCenterY() - 8 * fonteValor / 2);
-  display->print(textoValor);
+  imprimirTexto(layout::uiCenterX() - larguraTexto / 2, layout::uiCenterY() - 8 * fonteValor / 2,
+                textoValor);
 
   const int16_t barraX = layout::uiMargin();
   const int16_t barraY = display->height() - layout::uiFooterHeight() - layout::uiHeight(14);
@@ -640,8 +649,7 @@ void desenharListaRolavel(const char* titulo, const char* const* linhas,
     char buffer[32];
     truncarTexto(buffer, sizeof(buffer), linhas[indice],
                  display->width() - 2 * layout::uiMargin(), fonte);
-    display->setCursor(layout::uiMargin(), yInicial + linha * alturaLinha);
-    display->print(buffer);
+    imprimirTexto(layout::uiMargin(), yInicial + linha * alturaLinha, buffer);
   }
 
   display->flush();
@@ -688,6 +696,63 @@ void desenharGradeModulos(const char* titulo, uint8_t dimensao,
   display->flush();
 }
 
+void desenharTecladoTexto(const char* nomeAtual, const char* const* rotulos, uint8_t quantidade,
+                          uint8_t indiceSelecionado) {
+  if (!displayOk) return;
+  TravaBarramentoDisplay travaBus;
+
+  Serial.println("[IHM] Limpando tela em desenharTecladoTexto()");
+  display->fillScreen(COR_FUNDO);
+
+  char titulo[40];
+  snprintf(titulo, sizeof(titulo), "Nome: %s", nomeAtual != nullptr ? nomeAtual : "");
+  desenharCabecalhoRodape(titulo, "Gire: mover  KEY: escolher");
+
+  if (quantidade == 0 || rotulos == nullptr) {
+    display->flush();
+    return;
+  }
+
+  const uint8_t fonte = layout::uiFontSize(1);
+  // ~6px de largura de caractere por unidade de textSize na fonte padrão
+  // GFX (mesma estimativa usada em truncarTexto()); cada célula cabe até 2
+  // caracteres (rótulos como "OK") mais uma margem interna pequena.
+  const int16_t larguraCelula = 6 * fonte * 2 + layout::uiWidth(4);
+  const int16_t alturaCelula = 8 * fonte + layout::uiHeight(4);
+
+  const int16_t areaLargura = display->width() - 2 * layout::uiMargin();
+  uint8_t colunas = static_cast<uint8_t>(areaLargura / larguraCelula);
+  if (colunas < 1) colunas = 1;
+  if (colunas > quantidade) colunas = quantidade;
+
+  const int16_t xInicial = layout::uiMargin();
+  const int16_t yInicial = layout::uiHeaderHeight() + layout::uiMargin();
+  const int16_t yLimite = display->height() - layout::uiFooterHeight();
+
+  display->setTextSize(fonte);
+
+  for (uint8_t i = 0; i < quantidade; i++) {
+    const uint8_t linha = i / colunas;
+    const uint8_t coluna = i % colunas;
+    const int16_t x = xInicial + coluna * larguraCelula;
+    const int16_t y = yInicial + linha * alturaCelula;
+
+    // Grade grande demais pra área disponível: corta os últimos símbolos
+    // em vez de invadir o rodapé (não deveria acontecer com o alfabeto
+    // atual, mas protege contra um alfabeto maior no futuro).
+    if (y + alturaCelula > yLimite) break;
+
+    const bool selecionado = (i == indiceSelecionado);
+    if (selecionado) {
+      display->fillRect(x, y, larguraCelula - 1, alturaCelula - 1, COR_SELECIONADO);
+    }
+    display->setTextColor(selecionado ? COR_FUNDO : COR_TEXTO);
+    imprimirTexto(x + 2, y + 2, rotulos[i]);
+  }
+
+  display->flush();
+}
+
 void desenharMensagem(const char* titulo, const char* mensagem) {
   if (!displayOk) return;
   TravaBarramentoDisplay travaBus;
@@ -702,8 +767,7 @@ void desenharMensagem(const char* titulo, const char* mensagem) {
 
   display->setTextSize(fonte);
   display->setTextColor(COR_VALOR);
-  display->setCursor(layout::uiMargin(), layout::uiCenterY());
-  display->print(buffer);
+  imprimirTexto(layout::uiMargin(), layout::uiCenterY(), buffer);
   display->flush();
 }
 

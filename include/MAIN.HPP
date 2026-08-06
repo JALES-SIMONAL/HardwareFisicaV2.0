@@ -131,3 +131,36 @@ constexpr uint32_t UI_UPDATE_INTERVAL_MS = 16;
 // visual do display e teste inicial dos 6 LEDs), independente do brilho
 // normal usado depois pela indicação dos canais.
 constexpr uint8_t LED_STARTUP_BRIGHTNESS = 80;
+
+// ---------------------------------------------------------------------
+// Aparência da IHM local (display) — ajuste aqui sem precisar mexer em
+// layout.cpp/ihm.cpp.
+// ---------------------------------------------------------------------
+// Multiplicador extra de tamanho de fonte de toda a interface local (1.0 =
+// tamanho proporcional normal calculado por layout.cpp; 2.0 = dobro, etc.).
+// Aceita fração (ex.: 1.5) — é float de propósito, não uint8_t, senão um
+// valor como 1.5 seria truncado silenciosamente para 1 (sem erro de
+// compilação, só sem efeito nenhum). Aumentar isto também aumenta
+// automaticamente o espaçamento entre linhas de lista e a altura do
+// cabeçalho/rodapé (layout.cpp), para o texto maior nunca se sobrepor —
+// trade-off: menos itens cabem por tela, mais rolagem.
+constexpr float UI_FONT_SIZE_MULTIPLICADOR = 1.0f;
+
+// Cor (RGB565, formato 5-6-5 do Arduino_GFX) do cabeçalho de cada tela — a
+// faixa que mostra o título do menu/tela atual — e da barra de
+// preenchimento de valores editáveis (brilho, volume, repetições...).
+constexpr uint16_t UI_COR_CABECALHO = 0x8E7E;  // azul bebê (#89CFF0)
+
+// Cor (RGB565) do fundo do item atualmente selecionado numa lista/menu/
+// teclado de texto. Deliberadamente diferente de UI_COR_CABECALHO acima,
+// para dar pra distinguir de relance "em que tela estou" (cabeçalho) de
+// "qual item está selecionado" (destaque da lista).
+constexpr uint16_t UI_COR_SELECIONADO = 0xFD20;  // laranja (#FFA500)
+
+// Quando true, todo texto da IHM local é desenhado duas vezes — a segunda
+// com 1px de deslocamento horizontal — pra simular negrito ("double
+// strike"): a fonte embutida da biblioteca de display não tem uma
+// variante bold de verdade. Custo: cada texto leva ~2x o tempo pra
+// desenhar (imperceptível no uso normal, a tela já é redesenhada só sob
+// demanda).
+constexpr bool UI_FONTE_NEGRITO = true;

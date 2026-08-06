@@ -38,7 +38,10 @@ enum class CommandType : uint8_t {
   DeleteFile,
   Reconnect,
   ListFiles,
-  LoadRepetition
+  LoadRepetition,
+  GetChannels,
+  ReadFileData,
+  SetDeviceName
 };
 
 enum class Origem : uint8_t { Local, Bluetooth };

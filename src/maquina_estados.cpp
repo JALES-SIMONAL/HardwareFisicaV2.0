@@ -193,11 +193,21 @@ constexpr uint8_t QTD_MODO_BORDA = 5;
 uint8_t canalSelecionado = 1;
 EdgeMode modoPendente = EdgeMode::Both;
 
-constexpr uint8_t ITEM_ARQUIVO_RENOMEAR = 0;
-constexpr uint8_t ITEM_ARQUIVO_EXCLUIR = 1;
-constexpr uint8_t ITEM_ARQUIVO_VOLTAR = 2;
-constexpr const char* ITENS_ARQUIVO_DETALHE[] = {"Renomear", "Excluir", "Voltar"};
-constexpr uint8_t QTD_ARQUIVO_DETALHE = 3;
+constexpr uint8_t ITEM_ARQUIVO_VER_DADOS = 0;
+constexpr uint8_t ITEM_ARQUIVO_RENOMEAR = 1;
+constexpr uint8_t ITEM_ARQUIVO_EXCLUIR = 2;
+constexpr uint8_t ITEM_ARQUIVO_VOLTAR = 3;
+constexpr const char* ITENS_ARQUIVO_DETALHE[] = {"Ver dados", "Renomear", "Excluir", "Voltar"};
+constexpr uint8_t QTD_ARQUIVO_DETALHE = 4;
+
+// Linhas de dados (canal/estado/tempo_us + repetição) da tela "Ver dados" de
+// um arquivo, carregadas inteiras ao entrar na tela (sem paginação — ao
+// contrário da tabela rolante do app, que pagina pelo BLE). Cap baixo o
+// bastante pra rolar razoavelmente bem num encoder; arquivos maiores só têm
+// visualização completa pelo app.
+constexpr uint16_t MAX_LINHAS_DADOS_ARQUIVO = 100;
+char linhasDadosArquivo[MAX_LINHAS_DADOS_ARQUIVO][28];
+uint16_t quantidadeLinhasDadosArquivo = 0;
 
 // ---------------------------------------------------------------------
 // Títulos de menu para os logs de diagnóstico (Fase de rastreamento da
@@ -250,16 +260,18 @@ const char* tituloOpcaoMenu(Tela tela, uint8_t indice) {
   }
 }
 
-// Editor de nome de arquivo (usado tanto para salvar um experimento novo
-// quanto para renomear um arquivo existente). Alfabeto: [FIM] primeiro
-// (permite terminar o nome antes de preencher os 10 caracteres), depois
-// espaço, letras A-Z e dígitos 0-9.
+// Editor de texto genérico (usado para salvar um experimento novo, renomear
+// um arquivo existente e renomear o dispositivo BLE). Alfabeto: [FIM]
+// primeiro (permite terminar o nome antes de preencher os caracteres
+// disponíveis), depois espaço, letras A-Z e dígitos 0-9.
 constexpr char ALFABETO_NOME[] = "\x01 ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
 constexpr uint8_t MARCADOR_FIM_INDICE = 0;
 constexpr uint8_t QTD_ALFABETO_NOME = sizeof(ALFABETO_NOME) - 1;
-constexpr uint8_t TAMANHO_MAX_NOME_ARQUIVO = 10;
+// 20 cobre tanto nomes de arquivo quanto o nome BLE (bluetooth_app::
+// TAMANHO_MAX_NOME_DISPOSITIVO_BT), que reaproveita este mesmo editor.
+constexpr uint8_t TAMANHO_MAX_NOME_ARQUIVO = 20;
 
-enum class ModoEdicaoNome : uint8_t { SalvarExperimento, RenomearArquivo };
+enum class ModoEdicaoNome : uint8_t { SalvarExperimento, RenomearArquivo, RenomearDispositivoBT };
 ModoEdicaoNome modoEdicaoNome = ModoEdicaoNome::SalvarExperimento;
 
 struct EstadoNomeArquivo {
@@ -278,6 +290,42 @@ uint16_t quantidadeArquivosListados = 0;
 
 void atualizarListaArquivos() {
   quantidadeArquivosListados = armazenamento::listarArquivos(arquivosListados, MAX_ARQUIVOS_LISTA);
+}
+
+// Carrega (até MAX_LINHAS_DADOS_ARQUIVO) linhas de dados do arquivo inteiro
+// para a tela "Ver dados" — já formatadas para exibição, ao contrário de
+// bluetooth_app::publicarDadosArquivo() (que envia campos separados e pagina
+// sob demanda; aqui carrega tudo de uma vez, dentro do limite, porque a
+// tela local não tem como pedir mais páginas).
+void carregarDadosArquivo(const char* nomeComExtensao) {
+  quantidadeLinhasDadosArquivo = 0;
+  if (!armazenamento::abrirParaLeitura(nomeComExtensao)) return;
+
+  char linha[32];
+  uint16_t repeticaoAtualIdx = 0;
+  bool linhaAnteriorEraDados = false;
+
+  while (armazenamento::lerProximaLinha(linha, sizeof(linha))) {
+    if (linha[0] == '\0') {
+      if (linhaAnteriorEraDados) repeticaoAtualIdx++;
+      linhaAnteriorEraDados = false;
+      continue;
+    }
+
+    unsigned canal = 0;
+    char estado = '\0';
+    long long tempoUs = 0;
+    if (std::sscanf(linha, "%u,%c,%lld", &canal, &estado, &tempoUs) != 3) continue;
+    linhaAnteriorEraDados = true;
+
+    if (quantidadeLinhasDadosArquivo >= MAX_LINHAS_DADOS_ARQUIVO) continue;
+    snprintf(linhasDadosArquivo[quantidadeLinhasDadosArquivo],
+             sizeof(linhasDadosArquivo[quantidadeLinhasDadosArquivo]), "R%u C%u %c %lldus",
+             static_cast<unsigned>(repeticaoAtualIdx), canal, estado, tempoUs);
+    quantidadeLinhasDadosArquivo++;
+  }
+
+  armazenamento::fecharLeitura();
 }
 
 char arquivoAnaliseNome[16] = "";
@@ -404,7 +452,9 @@ const char* nomeTela(Tela tela) {
     case Tela::ArquivoDetalhe: return "Detalhe do arquivo";
     case Tela::ArquivoRenomear: return "Renomear";
     case Tela::ArquivoExcluirConfirmar: return "Excluir?";
+    case Tela::ArquivoDados: return "Ver dados";
     case Tela::ConexaoApp: return "Conexao com app";
+    case Tela::ConexaoAppRenomear: return "Renomear dispositivo BT";
     case Tela::AnaliseSelecionarArquivo: return "Selecionar arquivo";
     case Tela::AnaliseSelecionarRepeticao: return "Selecionar repeticao";
     case Tela::AnaliseEventos: return "Eventos";
@@ -572,6 +622,12 @@ void finalizarEdicaoNomeArquivo() {
     return;
   }
 
+  if (modoEdicaoNome == ModoEdicaoNome::RenomearDispositivoBT) {
+    bluetooth_app::definirNomeDispositivo(nomeFinal);
+    navegarPara(Tela::ConexaoApp);
+    return;
+  }
+
   if (modoEdicaoNome == ModoEdicaoNome::SalvarExperimento) {
     std::strncpy(nomeArquivoPendente, nomeFinal, sizeof(nomeArquivoPendente) - 1);
     nomeArquivoPendente[sizeof(nomeArquivoPendente) - 1] = '\0';
@@ -583,6 +639,7 @@ void finalizarEdicaoNomeArquivo() {
       navegarPara(Tela::ExperimentoSobrescreverConfirmar);
     } else {
       experimentos::salvarComoArquivoFinal(nomeFinal, false);
+      bluetooth_app::publicarListaArquivos();
       navegarPara(Tela::Experimentos);
     }
     return;
@@ -592,6 +649,7 @@ void finalizarEdicaoNomeArquivo() {
   char nomeComExtensao[TAMANHO_MAX_NOME_ARQUIVO + 5];
   snprintf(nomeComExtensao, sizeof(nomeComExtensao), "%s.csv", nomeFinal);
   if (armazenamento::renomearArquivo(arquivoSelecionadoNome, nomeComExtensao)) {
+    bluetooth_app::publicarListaArquivos();
     navegarPara(Tela::GerenciamentoArquivos);
   } else {
     // Já existe um arquivo com esse nome: nunca sobrescreve silenciosamente
@@ -635,6 +693,7 @@ void tratarEdicaoNomeArquivo(const Command& cmd) {
 
 void confirmarSobrescreverExperimentoSim() {
   experimentos::salvarComoArquivoFinal(nomeArquivoPendente, true);
+  bluetooth_app::publicarListaArquivos();
   navegarPara(Tela::Experimentos);
 }
 void confirmarSobrescreverExperimentoNao() { voltarUmNivel(); }
@@ -686,7 +745,10 @@ void tratarArquivoDetalhe(const Command& cmd) {
       precisaRedesenhar = true;
       break;
     case CommandType::Confirm:
-      if (estado.indiceSelecionado == ITEM_ARQUIVO_RENOMEAR) {
+      if (estado.indiceSelecionado == ITEM_ARQUIVO_VER_DADOS) {
+        carregarDadosArquivo(arquivoSelecionadoNome);
+        navegarPara(Tela::ArquivoDados);
+      } else if (estado.indiceSelecionado == ITEM_ARQUIVO_RENOMEAR) {
         modoEdicaoNome = ModoEdicaoNome::RenomearArquivo;
         std::strncpy(nomeArquivo.buffer, arquivoSelecionadoNome, sizeof(nomeArquivo.buffer) - 1);
         nomeArquivo.buffer[sizeof(nomeArquivo.buffer) - 1] = '\0';
@@ -710,6 +772,9 @@ void tratarArquivoDetalhe(const Command& cmd) {
 
 void confirmarExcluirArquivoSim() {
   armazenamento::excluirArquivo(arquivoSelecionadoNome);
+  // Igual ao comando Bluetooth equivalente: avisa o app que a lista mudou,
+  // mesmo quando a exclusão foi feita pelo encoder local.
+  bluetooth_app::publicarListaArquivos();
   navegarPara(Tela::GerenciamentoArquivos);
 }
 void confirmarExcluirArquivoNao() { voltarUmNivel(); }
@@ -718,10 +783,35 @@ void tratarArquivoExcluirConfirmar(const Command& cmd) {
   tratarConfirmacaoBinaria(cmd, confirmarExcluirArquivoSim, confirmarExcluirArquivoNao);
 }
 
+// Só leitura/rolagem — "Voltar" é o único item que faz algo ao confirmar,
+// igual ao padrão já usado em tratarConfigCanaisVisualizar().
+void tratarArquivoDados(const Command& cmd) {
+  const uint16_t qtd = quantidadeLinhasDadosArquivo + 1;
+  switch (cmd.tipo) {
+    case CommandType::Next:
+      estado.indiceSelecionado = (estado.indiceSelecionado + 1) % qtd;
+      precisaRedesenhar = true;
+      break;
+    case CommandType::Previous:
+      estado.indiceSelecionado = (estado.indiceSelecionado == 0) ? qtd - 1 : estado.indiceSelecionado - 1;
+      precisaRedesenhar = true;
+      break;
+    case CommandType::Confirm:
+    case CommandType::Back:
+      if (estado.indiceSelecionado == quantidadeLinhasDadosArquivo || cmd.tipo == CommandType::Back) {
+        voltarUmNivel();
+      }
+      break;
+    default:
+      break;
+  }
+}
+
 void tratarConexaoApp(const Command& cmd) {
-  constexpr uint8_t QTD_CONEXAO_APP = 5;
-  constexpr uint8_t ITEM_RECONECTAR = 3;
-  constexpr uint8_t ITEM_VOLTAR = 4;
+  constexpr uint8_t QTD_CONEXAO_APP = 7;
+  constexpr uint8_t ITEM_RENOMEAR = 4;
+  constexpr uint8_t ITEM_RECONECTAR = 5;
+  constexpr uint8_t ITEM_VOLTAR = 6;
 
   switch (cmd.tipo) {
     case CommandType::Next:
@@ -734,7 +824,14 @@ void tratarConexaoApp(const Command& cmd) {
       precisaRedesenhar = true;
       break;
     case CommandType::Confirm:
-      if (estado.indiceSelecionado == ITEM_RECONECTAR) {
+      if (estado.indiceSelecionado == ITEM_RENOMEAR) {
+        modoEdicaoNome = ModoEdicaoNome::RenomearDispositivoBT;
+        std::strncpy(nomeArquivo.buffer, bluetooth_app::nomeDispositivo(), sizeof(nomeArquivo.buffer) - 1);
+        nomeArquivo.buffer[sizeof(nomeArquivo.buffer) - 1] = '\0';
+        nomeArquivo.posicaoCursor = static_cast<uint8_t>(std::strlen(nomeArquivo.buffer));
+        nomeArquivo.indiceAlfabetoAtual = 0;
+        navegarPara(Tela::ConexaoAppRenomear);
+      } else if (estado.indiceSelecionado == ITEM_RECONECTAR) {
         bluetooth_app::reconectar();
         precisaRedesenhar = true;
       } else if (estado.indiceSelecionado == ITEM_VOLTAR) {
@@ -1153,6 +1250,9 @@ void confirmarConfigTodosSim() {
   Serial.printf("[DIAG][MENU] confirmarConfigTodosSim: chamando canais::definirTodos(%u)\n",
                 static_cast<unsigned>(modoPendente));
   canais::definirTodos(modoPendente);
+  // Igual ao comando Bluetooth equivalente: sem isto, uma mudança feita pelo
+  // encoder local não chegava ao app enquanto ele não desconectasse/reconectasse.
+  bluetooth_app::publicarConfiguracaoCanais();
   navegarPara(Tela::ConfigCanais);
 }
 void confirmarConfigTodosNao() { voltarUmNivel(); }
@@ -1213,6 +1313,7 @@ void confirmarConfigIndividualSim() {
   Serial.printf("[DIAG][MENU] confirmarConfigIndividualSim: canais::definirModo(canal=%u, modo=%u)\n",
                 static_cast<unsigned>(canalSelecionado), static_cast<unsigned>(modoPendente));
   canais::definirModo(canalSelecionado, modoPendente);
+  bluetooth_app::publicarConfiguracaoCanais();
   navegarPara(Tela::ConfigCanaisIndividualLista);
 }
 void confirmarConfigIndividualNao() { voltarUmNivel(); }
@@ -1242,6 +1343,7 @@ void tratarConfigCanaisVisualizar(const Command& cmd) {
 
 void confirmarRestaurarSim() {
   canais::restaurarPadrao();
+  bluetooth_app::publicarConfiguracaoCanais();
   navegarPara(Tela::ConfigCanais);
 }
 void confirmarRestaurarNao() { voltarUmNivel(); }
@@ -1345,12 +1447,14 @@ void redesenharConexaoApp() {
   char linhaBt[24];
   char linhaMac[24];
   char linhaId[24];
+  char linhaNome[32];
   snprintf(linhaBt, sizeof(linhaBt), "BT: %s", bluetooth_app::conectado() ? "conectado" : "desconectado");
   snprintf(linhaMac, sizeof(linhaMac), "MAC: %s", bluetooth_app::enderecoMac());
   snprintf(linhaId, sizeof(linhaId), "ID: %s", bluetooth_app::deviceId());
+  snprintf(linhaNome, sizeof(linhaNome), "Nome: %s", bluetooth_app::nomeDispositivo());
 
-  const char* itens[] = {linhaBt, linhaMac, linhaId, "Reconectar", "Voltar"};
-  ihm::desenharListaMenu("Conexao com app", itens, 5, estado.indiceSelecionado, estado.offsetRolagem);
+  const char* itens[] = {linhaBt, linhaMac, linhaId, linhaNome, "Renomear", "Reconectar", "Voltar"};
+  ihm::desenharListaMenu("Conexao com app", itens, 7, estado.indiceSelecionado, estado.offsetRolagem);
 }
 
 void redesenharConfigCanaisIndividualLista() {
@@ -1410,7 +1514,7 @@ void redesenharExperimentoExecucao() {
 }
 
 void redesenharEdicaoNomeArquivo() {
-  char titulo[24];
+  char titulo[TAMANHO_MAX_NOME_ARQUIVO + 8];
   snprintf(titulo, sizeof(titulo), "Nome: %s", nomeArquivo.buffer);
 
   char caractereAtual[8];
@@ -1445,6 +1549,22 @@ void redesenharGerenciamentoArquivos() {
   itens[quantidadeArquivosListados] = "Voltar";
 
   ihm::desenharListaMenu("Arquivos", itens, quantidadeArquivosListados + 1, estado.indiceSelecionado,
+                          estado.offsetRolagem);
+}
+
+void redesenharArquivoDados() {
+  if (quantidadeLinhasDadosArquivo == 0) {
+    ihm::desenharMensagem("Ver dados", "Sem dados (ou SD indisponivel)");
+    return;
+  }
+
+  const char* itens[MAX_LINHAS_DADOS_ARQUIVO + 1];
+  for (uint16_t i = 0; i < quantidadeLinhasDadosArquivo; i++) {
+    itens[i] = linhasDadosArquivo[i];
+  }
+  itens[quantidadeLinhasDadosArquivo] = "Voltar";
+
+  ihm::desenharListaMenu("Ver dados", itens, quantidadeLinhasDadosArquivo + 1, estado.indiceSelecionado,
                           estado.offsetRolagem);
 }
 
@@ -1659,6 +1779,7 @@ void redesenharTelaAtual() {
       break;
     case Tela::ExperimentoNomeArquivo:
     case Tela::ArquivoRenomear:
+    case Tela::ConexaoAppRenomear:
       redesenharEdicaoNomeArquivo();
       break;
     case Tela::ExperimentoSobrescreverConfirmar: {
@@ -1680,6 +1801,9 @@ void redesenharTelaAtual() {
       ihm::desenharConfirmacao(pergunta, estado.indiceSelecionado);
       break;
     }
+    case Tela::ArquivoDados:
+      redesenharArquivoDados();
+      break;
     case Tela::ConexaoApp:
       redesenharConexaoApp();
       break;
@@ -1931,6 +2055,21 @@ void processarComando(const Command& cmd, Origem /*origem*/) {
       bluetooth_app::publicarEventosAnalise();
       precisaRedesenhar = true;
       return;
+    case CommandType::GetChannels:
+      // Sob demanda: o app pede isto ao abrir uma tela que exibe a config.
+      // de canais, para nunca mostrar um valor obsoleto de antes da conexão
+      // (ou de uma mudança local perdida enquanto o app estava fora).
+      bluetooth_app::publicarConfiguracaoCanais();
+      return;
+    case CommandType::ReadFileData:
+      // Paginado: cmd.valor é o offset (em linhas de dados) da página
+      // pedida pela tabela rolante do app; sem equivalente na tela física.
+      bluetooth_app::publicarDadosArquivo(cmd.texto, static_cast<uint16_t>(cmd.valor));
+      return;
+    case CommandType::SetDeviceName:
+      bluetooth_app::definirNomeDispositivo(cmd.texto);
+      if (estado.telaAtual == Tela::ConexaoApp) precisaRedesenhar = true;
+      return;
     default:
       break;
   }
@@ -1989,6 +2128,7 @@ void processarComando(const Command& cmd, Origem /*origem*/) {
       break;
     case Tela::ExperimentoNomeArquivo:
     case Tela::ArquivoRenomear:
+    case Tela::ConexaoAppRenomear:
       tratarEdicaoNomeArquivo(cmd);
       break;
     case Tela::ExperimentoSobrescreverConfirmar:
@@ -2002,6 +2142,9 @@ void processarComando(const Command& cmd, Origem /*origem*/) {
       break;
     case Tela::ArquivoExcluirConfirmar:
       tratarArquivoExcluirConfirmar(cmd);
+      break;
+    case Tela::ArquivoDados:
+      tratarArquivoDados(cmd);
       break;
     case Tela::ConexaoApp:
       tratarConexaoApp(cmd);

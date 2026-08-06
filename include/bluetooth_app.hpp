@@ -15,13 +15,18 @@
 // Service) que substitui o antigo canal serial ponto-a-ponto do SPP.
 namespace bluetooth_app {
 
-// Nome anunciado durante o escaneamento/pareamento BLE.
-constexpr const char* NOME_DISPOSITIVO_BT = "Gerador_UFRN_BT";
+// Nome padrão anunciado durante o escaneamento/pareamento BLE, usado só na
+// primeira vez que o equipamento liga (sem nome salvo ainda). Depois disso o
+// nome efetivo vem da NVS (ver nomeDispositivo()/definirNomeDispositivo()) e
+// pode ser trocado pelo usuário — local ou pelo app.
+constexpr const char* NOME_DISPOSITIVO_BT_PADRAO = "Gerador_UFRN_BT";
+constexpr uint8_t TAMANHO_MAX_NOME_DISPOSITIVO_BT = 20;
 
 constexpr uint32_t INTERVALO_PUBLICACAO_ESTADO_MS = 1000;
 
-// Inicia a pilha BLE (NimBLE) como periférico/servidor GATT, anunciando
-// NOME_DISPOSITIVO_BT. Não bloqueia.
+// Inicia a pilha BLE (NimBLE) como periférico/servidor GATT, anunciando o
+// nome salvo na NVS (ou NOME_DISPOSITIVO_BT_PADRAO, na primeira vez). Não
+// bloqueia.
 void init();
 
 // Chamada em loop pela tarefa de IHM/Bluetooth: drena os comandos
@@ -33,6 +38,18 @@ bool conectado();
 
 const char* deviceId();
 const char* enderecoMac();
+
+// Nome atualmente anunciado no BLE (o mesmo enviado no campo "nome_bt" da
+// mensagem "info").
+const char* nomeDispositivo();
+
+// Troca o nome anunciado no BLE: persiste na NVS, aplica na pilha NimBLE
+// (GAP + advertising, reiniciando o advertising para o novo nome valer já no
+// próximo escaneamento) e — se houver um app conectado — republica
+// publicarInfoDispositivo() para refletir a mudança imediatamente. Usado
+// tanto pelo comando remoto "set_device_name" quanto pelo editor de nome
+// local (tela "Conexao com app").
+void definirNomeDispositivo(const char* novoNome);
 
 // Payload/JSON idêntico ao antigo tópico MQTT correspondente, apenas com um
 // campo "topico" adicional (mesmo papel dos antigos tópicos separados) para
@@ -60,6 +77,13 @@ void publicarListaArquivos();
 // tela "Eventos" da análise) — array vazio quando a repetição não existe ou
 // não tem eventos.
 void publicarEventosAnalise();
+
+// Publicada sob demanda em resposta à ação "read_file_data": uma página (até
+// TAMANHO_PAGINA_DADOS_ARQUIVO linhas) do CSV do arquivo, a partir da
+// "offset"-ésima linha de dados (cabeçalho e linhas em branco não contam),
+// junto com o número da repetição de cada linha — alimenta a tabela rolante
+// de dados do arquivo no app (sem equivalente na tela física).
+void publicarDadosArquivo(const char* nomeArquivo, uint16_t offset);
 
 // Derruba a conexão BLE atual (se houver), forçando o app a reconectar —
 // usado pelo item "Reconectar" da tela "Conexao com app".

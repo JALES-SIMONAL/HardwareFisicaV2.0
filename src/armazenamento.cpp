@@ -294,6 +294,28 @@ void fecharArquivoAtual() {
   xSemaphoreGive(mutexArquivo);
 }
 
+namespace {
+
+bool nomesIguaisSemCase(const char* a, const char* b) {
+  while (*a != '\0' && *b != '\0') {
+    const char ca = (*a >= 'a' && *a <= 'z') ? static_cast<char>(*a - 'a' + 'A') : *a;
+    const char cb = (*b >= 'a' && *b <= 'z') ? static_cast<char>(*b - 'a' + 'A') : *b;
+    if (ca != cb) return false;
+    a++;
+    b++;
+  }
+  return *a == '\0' && *b == '\0';
+}
+
+// Logotipos de boot (docs/*.bmp copiados para a raiz do SD): não são
+// arquivos de dados de experimento, então nunca devem aparecer nas telas de
+// Gerenciamento de arquivos/Análise de dados (local ou pelo app).
+bool ehArquivoOcultoDoUsuario(const char* nome) {
+  return nomesIguaisSemCase(nome, "Monkey Tech.bmp") || nomesIguaisSemCase(nome, "UFRN.bmp");
+}
+
+}  // namespace
+
 uint16_t listarArquivos(InfoArquivo* destino, uint16_t capacidadeDestino) {
   if (!cartaoOk || destino == nullptr) return 0;
 
@@ -304,7 +326,7 @@ uint16_t listarArquivos(InfoArquivo* destino, uint16_t capacidadeDestino) {
   uint16_t quantidade = 0;
   File entrada = raiz.openNextFile();
   while (entrada && quantidade < capacidadeDestino) {
-    if (!entrada.isDirectory()) {
+    if (!entrada.isDirectory() && !ehArquivoOcultoDoUsuario(entrada.name())) {
       std::strncpy(destino[quantidade].nome, entrada.name(), sizeof(destino[quantidade].nome) - 1);
       destino[quantidade].nome[sizeof(destino[quantidade].nome) - 1] = '\0';
       destino[quantidade].tamanhoBytes = static_cast<uint32_t>(entrada.size());

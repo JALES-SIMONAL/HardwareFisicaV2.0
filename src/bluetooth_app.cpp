@@ -2,6 +2,7 @@
 
 #include <ArduinoJson.h>
 #include <NimBLEDevice.h>
+#include <Preferences.h>
 #include <cstdio>
 #include <cstring>
 #include <freertos/FreeRTOS.h>
@@ -46,6 +47,13 @@ struct LinhaComando {
 
 NimBLEServer* pServidor = nullptr;
 NimBLECharacteristic* pCaracteristicaTx = nullptr;
+NimBLEAdvertising* pAdvertising = nullptr;
+
+// Nome anunciado no BLE: carregado da NVS em init() (ou
+// NOME_DISPOSITIVO_BT_PADRAO, na primeira vez), trocável depois em tempo de
+// execução por definirNomeDispositivo().
+constexpr const char* NAMESPACE_PREFS_BT = "hwfisica_bt";
+char nomeDispositivoBuffer[TAMANHO_MAX_NOME_DISPOSITIVO_BT + 1] = "";
 
 char deviceIdBuffer[16] = "";
 volatile uint16_t connHandleAtual = BLE_HS_CONN_HANDLE_NONE;
@@ -54,6 +62,10 @@ bool clienteConectadoAnterior = false;
 unsigned long ultimaPublicacaoEstadoMs = 0;
 unsigned long ultimaPublicacaoTesteCanaisMs = 0;
 constexpr uint32_t INTERVALO_PUBLICACAO_TESTE_CANAIS_MS = 300;
+
+// Paginação da tabela rolante de dados do arquivo (ver publicarDadosArquivo):
+// cada página traz no máximo esta quantidade de linhas de dados.
+constexpr uint16_t TAMANHO_PAGINA_DADOS_ARQUIVO = 20;
 
 // Fila FreeRTOS: onWrite() (callback disparada pela tarefa própria da pilha
 // NimBLE) só acumula bytes e enfileira linhas completas — quem de fato
@@ -118,9 +130,13 @@ void enviarLinha(const char* payload, size_t tamanho) {
 
 void processarLinha(char* linha) {
   JsonDocument doc;
-  if (deserializeJson(doc, linha) != DeserializationError::Ok) return;
+  if (deserializeJson(doc, linha) != DeserializationError::Ok) {
+    Serial.printf("[DIAG][BT] JSON invalido recebido do app: \"%s\"\n", linha);
+    return;
+  }
 
   const char* acao = doc["action"] | "";
+  Serial.printf("[DIAG][BT] Comando recebido do app: action=\"%s\" linha=\"%s\"\n", acao, linha);
   comandos::Command cmd;
 
   if (std::strcmp(acao, "next") == 0) {
@@ -174,6 +190,15 @@ void processarLinha(char* linha) {
     cmd.tipo = comandos::CommandType::LoadRepetition;
     std::strncpy(cmd.texto, doc["arquivo"] | "", sizeof(cmd.texto) - 1);
     cmd.valor = doc["repeticao"] | 0;
+  } else if (std::strcmp(acao, "get_channels") == 0) {
+    cmd.tipo = comandos::CommandType::GetChannels;
+  } else if (std::strcmp(acao, "read_file_data") == 0) {
+    cmd.tipo = comandos::CommandType::ReadFileData;
+    std::strncpy(cmd.texto, doc["arquivo"] | "", sizeof(cmd.texto) - 1);
+    cmd.valor = doc["offset"] | 0;
+  } else if (std::strcmp(acao, "set_device_name") == 0) {
+    cmd.tipo = comandos::CommandType::SetDeviceName;
+    std::strncpy(cmd.texto, doc["nome"] | "", sizeof(cmd.texto) - 1);
   } else {
     return;
   }
@@ -223,13 +248,26 @@ class ServerCallbacks : public NimBLEServerCallbacks {
 RxCallbacks rxCallbacks;
 ServerCallbacks serverCallbacks;
 
+// Carrega o nome salvo na NVS para nomeDispositivoBuffer (ou
+// NOME_DISPOSITIVO_BT_PADRAO, se nunca foi trocado).
+void carregarNomeDispositivo() {
+  Preferences prefs;
+  prefs.begin(NAMESPACE_PREFS_BT, true);
+  const String salvo = prefs.getString("nome", NOME_DISPOSITIVO_BT_PADRAO);
+  prefs.end();
+
+  std::strncpy(nomeDispositivoBuffer, salvo.c_str(), sizeof(nomeDispositivoBuffer) - 1);
+  nomeDispositivoBuffer[sizeof(nomeDispositivoBuffer) - 1] = '\0';
+}
+
 }  // namespace
 
 void init() {
   mutexBt = xSemaphoreCreateRecursiveMutex();
   filaComandosBt = xQueueCreate(BT_COMMAND_QUEUE_LEN, sizeof(LinhaComando));
 
-  NimBLEDevice::init(NOME_DISPOSITIVO_BT);
+  carregarNomeDispositivo();
+  NimBLEDevice::init(nomeDispositivoBuffer);
 
   pServidor = NimBLEDevice::createServer();
   pServidor->setCallbacks(&serverCallbacks);
@@ -241,15 +279,57 @@ void init() {
   pCaracteristicaRx->setCallbacks(&rxCallbacks);
   pServico->start();
 
-  NimBLEAdvertising* pAdvertising = NimBLEDevice::getAdvertising();
+  pAdvertising = NimBLEDevice::getAdvertising();
   pAdvertising->addServiceUUID(SERVICE_UUID);
-  pAdvertising->setName(NOME_DISPOSITIVO_BT);
+  pAdvertising->setName(nomeDispositivoBuffer);
   // Ajuda clientes iOS a descobrirem o serviço durante o scan (recomendação
   // padrão do NimBLE-Arduino para compatibilidade com iPhone/iPad).
   pAdvertising->setScanResponse(true);
   pAdvertising->start();
 
   gerarDeviceId();
+}
+
+const char* nomeDispositivo() { return nomeDispositivoBuffer; }
+
+void definirNomeDispositivo(const char* novoNome) {
+  TravaBt trava;
+  Serial.printf("[DIAG][BT] definirNomeDispositivo(\"%s\") chamado\n",
+                novoNome != nullptr ? novoNome : "(nullptr)");
+  if (novoNome == nullptr || novoNome[0] == '\0') {
+    Serial.println("[DIAG][BT] nome vazio/nulo — ignorado");
+    return;
+  }
+
+  std::strncpy(nomeDispositivoBuffer, novoNome, sizeof(nomeDispositivoBuffer) - 1);
+  nomeDispositivoBuffer[sizeof(nomeDispositivoBuffer) - 1] = '\0';
+
+  Preferences prefs;
+  const bool prefsOk = prefs.begin(NAMESPACE_PREFS_BT, false);
+  const size_t bytesGravados = prefs.putString("nome", nomeDispositivoBuffer);
+  prefs.end();
+  Serial.printf(
+      "[DIAG][BT] prefs.begin=%d putString(\"nome\",\"%s\") bytesGravados=%u nomeDispositivoBuffer=\"%s\"\n",
+      static_cast<int>(prefsOk), nomeDispositivoBuffer, static_cast<unsigned>(bytesGravados),
+      nomeDispositivoBuffer);
+
+  // Atualiza o nome GAP (visível a um app já conectado) e o pacote de
+  // advertising (visível num scan futuro) — precisa reiniciar o advertising
+  // para o pacote atualizado valer, já que setName() só muda o buffer interno.
+  NimBLEDevice::setDeviceName(nomeDispositivoBuffer);
+  if (pAdvertising != nullptr) {
+    pAdvertising->setName(nomeDispositivoBuffer);
+    const bool paradaOk = pAdvertising->stop();
+    const bool inicioOk = pAdvertising->start();
+    Serial.printf("[DIAG][BT] advertising stop=%d start=%d\n", static_cast<int>(paradaOk),
+                  static_cast<int>(inicioOk));
+  } else {
+    Serial.println("[DIAG][BT] pAdvertising == nullptr (nao deveria acontecer apos init())");
+  }
+
+  Serial.printf("[DIAG][BT] clienteConectado=%d — %s publicarInfoDispositivo()\n",
+                static_cast<int>(clienteConectado), clienteConectado ? "chamando" : "pulando");
+  if (clienteConectado) publicarInfoDispositivo();
 }
 
 void loop() {
@@ -342,8 +422,13 @@ void publicarInfoDispositivo() {
   doc["device_id"] = deviceIdBuffer;
   doc["mac"] = enderecoMac();
   doc["manual_url"] = configuracoes::MANUAL_URL;
+  doc["nome_bt"] = nomeDispositivoBuffer;
 
-  char payload[256];
+  // 256 bastava antes de "nome_bt" existir; com autor + manual_url (~36
+  // chars) + até 20 chars de nome BLE, o total podia passar de 256 e
+  // serializeJson() truncava silenciosamente o JSON (o app então falhava ao
+  // decodificar e nunca via o nome novo) — por isso o buffer maior aqui.
+  char payload[384];
   const size_t tamanho = serializeJson(doc, payload, sizeof(payload));
   enviarLinha(payload, tamanho);
 }
@@ -408,6 +493,69 @@ void publicarEventosAnalise() {
   }
 
   char payload[2048];
+  const size_t tamanho = serializeJson(doc, payload, sizeof(payload));
+  enviarLinha(payload, tamanho);
+}
+
+void publicarDadosArquivo(const char* nomeArquivo, uint16_t offset) {
+  TravaBt trava;
+  if (!clienteConectado) return;
+
+  JsonDocument doc;
+  doc["topico"] = "dados_arquivo";
+  doc["arquivo"] = nomeArquivo;
+  doc["offset"] = offset;
+  JsonArray linhasArray = doc["linhas"].to<JsonArray>();
+  bool temMais = false;
+
+  if (armazenamento::abrirParaLeitura(nomeArquivo)) {
+    char linha[32];
+    uint16_t repeticaoAtualIdx = 0;
+    bool linhaAnteriorEraDados = false;
+    uint16_t linhasDadosVistas = 0;
+
+    while (armazenamento::lerProximaLinha(linha, sizeof(linha))) {
+      if (linha[0] == '\0') {
+        // Linha em branco: separa repetições (mesma regra de
+        // analise_dados::carregarRepeticao — só avança se a repetição
+        // anterior teve alguma linha de dados válida).
+        if (linhaAnteriorEraDados) repeticaoAtualIdx++;
+        linhaAnteriorEraDados = false;
+        continue;
+      }
+
+      unsigned canal = 0;
+      char estado = '\0';
+      long long tempoUs = 0;
+      if (std::sscanf(linha, "%u,%c,%lld", &canal, &estado, &tempoUs) != 3) {
+        continue;  // Cabeçalho ou linha corrompida: ignora.
+      }
+      linhaAnteriorEraDados = true;
+
+      if (linhasDadosVistas < offset) {
+        linhasDadosVistas++;
+        continue;
+      }
+
+      if (linhasArray.size() >= TAMANHO_PAGINA_DADOS_ARQUIVO) {
+        temMais = true;
+        break;
+      }
+
+      JsonObject l = linhasArray.add<JsonObject>();
+      l["repeticao"] = repeticaoAtualIdx;
+      l["canal"] = static_cast<uint8_t>(canal);
+      const char estadoStr[2] = {estado, '\0'};
+      l["estado"] = estadoStr;
+      l["tempo_us"] = static_cast<long long>(tempoUs);
+      linhasDadosVistas++;
+    }
+    armazenamento::fecharLeitura();
+  }
+
+  doc["tem_mais"] = temMais;
+
+  char payload[1536];
   const size_t tamanho = serializeJson(doc, payload, sizeof(payload));
   enviarLinha(payload, tamanho);
 }

@@ -517,8 +517,22 @@ void desenharCabecalhoRodape(const char* titulo, const char* rodape) {
 }
 
 void desenharListaMenu(const char* titulo, const char* const* itens, uint8_t quantidade,
-                       uint8_t indiceSelecionado, uint8_t offsetRolagem) {
+                       uint8_t indiceSelecionado, uint8_t& offsetRolagem) {
   if (!displayOk) return;
+
+  const uint8_t itensVisiveis = layout::uiItensVisiveis();
+
+  // Mantem o item selecionado sempre dentro da janela visivel: rola para
+  // cima se ele ficou acima do topo, ou para baixo se ficou depois da
+  // ultima linha desenhada.
+  if (itensVisiveis > 0) {
+    if (indiceSelecionado < offsetRolagem) {
+      offsetRolagem = indiceSelecionado;
+    } else if (indiceSelecionado >= offsetRolagem + itensVisiveis) {
+      offsetRolagem = indiceSelecionado - itensVisiveis + 1;
+    }
+  }
+
   TravaBarramentoDisplay travaBus;
 
   static bool ponteiroJaLogado = false;
@@ -531,7 +545,6 @@ void desenharListaMenu(const char* titulo, const char* const* itens, uint8_t qua
   display->fillScreen(COR_FUNDO);
   desenharCabecalhoRodape(titulo);
 
-  const uint8_t itensVisiveis = layout::uiItensVisiveis();
   const int16_t yInicial = layout::uiHeaderHeight() + layout::uiMargin();
   const int16_t alturaLinha = layout::uiLineSpacing();
   const uint8_t fonte = layout::uiFontSize(1);

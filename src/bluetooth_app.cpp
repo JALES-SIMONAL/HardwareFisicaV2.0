@@ -206,6 +206,9 @@ void processarLinha(char* linha) {
   } else if (std::strcmp(acao, "set_device_name") == 0) {
     cmd.tipo = comandos::CommandType::SetDeviceName;
     std::strncpy(cmd.texto, doc["nome"] | "", sizeof(cmd.texto) - 1);
+  } else if (std::strcmp(acao, "set_datetime") == 0) {
+    cmd.tipo = comandos::CommandType::SetDateTime;
+    cmd.valor = doc["epoch"] | 0;
   } else {
     return;
   }

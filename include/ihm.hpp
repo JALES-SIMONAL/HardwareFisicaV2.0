@@ -69,8 +69,11 @@ void desenharCabecalhoRodape(const char* titulo, const char* rodape = nullptr);
 
 // Lista de opções com rolagem automática e destaque do item selecionado.
 // "Voltar" deve ser sempre o último item da lista, por convenção do chamador.
+// offsetRolagem é ajustado internamente (por referência) para manter o item
+// selecionado sempre visível, e o valor ajustado fica disponível para o
+// chamador reutilizar no próximo redesenho.
 void desenharListaMenu(const char* titulo, const char* const* itens, uint8_t quantidade,
-					   uint8_t indiceSelecionado, uint8_t offsetRolagem);
+					   uint8_t indiceSelecionado, uint8_t& offsetRolagem);
 
 // Caixa de confirmação Sim/Não.
 void desenharConfirmacao(const char* pergunta, uint8_t indiceSelecionado);

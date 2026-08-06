@@ -1,6 +1,7 @@
 #include "maquina_estados.hpp"
 
 #include <Arduino.h>
+#include <Preferences.h>
 #include <cstdio>
 #include <cstring>
 #include <qrcode.h>
@@ -15,6 +16,7 @@
 #include "experimentos.hpp"
 #include "ihm.hpp"
 #include "layout.hpp"
+#include "tempo.hpp"
 
 namespace maquina_estados {
 
@@ -282,6 +284,34 @@ struct EstadoNomeArquivo {
 };
 EstadoNomeArquivo nomeArquivo;
 char nomeArquivoPendente[TAMANHO_MAX_NOME_ARQUIVO + 1] = "";
+
+// Contador persistido na NVS p/ sugerir "MEDICAOn" quando o horario ainda
+// nao foi recebido do app (ver gerarNomeSugerido). Incrementado a cada
+// medicao finalizada, mesmo que o usuario troque o nome sugerido.
+constexpr const char* NAMESPACE_PREFS_MEDICAO = "hwfisica_med";
+
+uint32_t proximoNumeroMedicao() {
+  Preferences prefs;
+  prefs.begin(NAMESPACE_PREFS_MEDICAO, false);
+  const uint32_t proximo = prefs.getUInt("prox", 1);
+  prefs.putUInt("prox", proximo + 1);
+  prefs.end();
+  return proximo;
+}
+
+// Nome sugerido ao entrar na tela de nomear uma medicao recem-finalizada:
+// "T" + data/hora (DDMMAAAA_HHMM) se o app ja informou o horario atual
+// nesta conexao, ou "MEDICAO" + numero crescente caso contrario. O usuario
+// pode aceitar (Confirmar direto) ou apagar/editar antes de confirmar.
+void gerarNomeSugerido(char* saida, size_t tamanho) {
+  if (tempo::horarioConhecido()) {
+    char dataHora[16];
+    tempo::formatarDataHoraAtual(dataHora, sizeof(dataHora));
+    snprintf(saida, tamanho, "T%s", dataHora);
+  } else {
+    snprintf(saida, tamanho, "MEDICAO%lu", static_cast<unsigned long>(proximoNumeroMedicao()));
+  }
+}
 
 char arquivoSelecionadoNome[16] = "";
 
@@ -576,8 +606,8 @@ void tratarExperimentoExecucao(const Command& cmd) {
         experimentos::finalizarRepeticaoAtual();
         if (experimentos::aguardandoNomeArquivo()) {
           modoEdicaoNome = ModoEdicaoNome::SalvarExperimento;
-          nomeArquivo.buffer[0] = '\0';
-          nomeArquivo.posicaoCursor = 0;
+          gerarNomeSugerido(nomeArquivo.buffer, sizeof(nomeArquivo.buffer));
+          nomeArquivo.posicaoCursor = static_cast<uint8_t>(std::strlen(nomeArquivo.buffer));
           nomeArquivo.indiceAlfabetoAtual = 0;
           navegarPara(Tela::ExperimentoNomeArquivo);
         } else {
@@ -1386,7 +1416,8 @@ void redesenharValorComVoltar(const char* titulo, int32_t valorExibido, int32_t 
     snprintf(linhaValor, sizeof(linhaValor), "%s: %ld", titulo, static_cast<long>(valorExibido));
   }
   const char* itens[2] = {linhaValor, "Voltar"};
-  ihm::desenharListaMenu(titulo, itens, 2, estado.indiceSelecionado, 0);
+  uint8_t offsetFixo = 0;
+  ihm::desenharListaMenu(titulo, itens, 2, estado.indiceSelecionado, offsetFixo);
 }
 
 // Trata Next/Previous/Confirm do SELETOR "valor + Voltar" (índice 0 =
@@ -1512,7 +1543,8 @@ void redesenharTesteCanais() {
   }
   itens[NUM_CHANNELS] = "Voltar";
 
-  ihm::desenharListaMenu("Teste de canais", itens, NUM_CHANNELS + 1, 0, 0);
+  uint8_t offsetFixo = 0;
+  ihm::desenharListaMenu("Teste de canais", itens, NUM_CHANNELS + 1, 0, offsetFixo);
 }
 
 void redesenharExperimentoExecucao() {
@@ -1525,7 +1557,8 @@ void redesenharExperimentoExecucao() {
            static_cast<long long>(tempoS));
 
   const char* itens[2] = {"Finalizar repeticao", "Cancelar experimento"};
-  ihm::desenharListaMenu(titulo, itens, 2, estado.indiceSelecionado, 0);
+  uint8_t offsetFixo = 0;
+  ihm::desenharListaMenu(titulo, itens, 2, estado.indiceSelecionado, offsetFixo);
 }
 
 // Rótulo curto (até 2 caracteres) por símbolo do alfabeto, para o teclado
@@ -2100,6 +2133,9 @@ void processarComando(const Command& cmd, Origem /*origem*/) {
     case CommandType::SetDeviceName:
       bluetooth_app::definirNomeDispositivo(cmd.texto);
       if (estado.telaAtual == Tela::ConexaoApp) precisaRedesenhar = true;
+      return;
+    case CommandType::SetDateTime:
+      tempo::definirEpoch(static_cast<uint32_t>(cmd.valor));
       return;
     default:
       break;

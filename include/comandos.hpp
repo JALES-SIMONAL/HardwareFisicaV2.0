@@ -41,7 +41,8 @@ enum class CommandType : uint8_t {
   LoadRepetition,
   GetChannels,
   ReadFileData,
-  SetDeviceName
+  SetDeviceName,
+  SetDateTime         // epoch UTC (segundos) enviado pelo app ao conectar
 };
 
 enum class Origem : uint8_t { Local, Bluetooth };

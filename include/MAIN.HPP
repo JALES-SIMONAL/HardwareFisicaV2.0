@@ -133,6 +133,18 @@ constexpr uint32_t UI_UPDATE_INTERVAL_MS = 16;
 constexpr uint8_t LED_STARTUP_BRIGHTNESS = 80;
 
 // ---------------------------------------------------------------------
+// Duração (ms) de cada tela da sequência de boot (maquina_estados.cpp,
+// atualizarBoot()) — ajuste aqui sem precisar mexer no código.
+// ---------------------------------------------------------------------
+constexpr uint32_t BOOT_DURACAO_LOGO_MONKEY_TECH_MS = 1000;
+constexpr uint32_t BOOT_DURACAO_LOGO_UFRN_MS = 1000;
+constexpr uint32_t BOOT_DURACAO_LED_VERMELHO_MS = 500;
+constexpr uint32_t BOOT_DURACAO_LED_AZUL_MS = 500;
+constexpr uint32_t BOOT_DURACAO_LED_VERDE_MS = 500;
+constexpr uint32_t BOOT_DURACAO_LED_APAGADO_MS = 150;
+constexpr uint32_t BOOT_DURACAO_DESENVOLVEDOR_MS = 1000;
+
+// ---------------------------------------------------------------------
 // Aparência da IHM local (display) — ajuste aqui sem precisar mexer em
 // layout.cpp/ihm.cpp.
 // ---------------------------------------------------------------------
@@ -149,13 +161,23 @@ constexpr float UI_FONT_SIZE_MULTIPLICADOR = 1.0f;
 // Cor (RGB565, formato 5-6-5 do Arduino_GFX) do cabeçalho de cada tela — a
 // faixa que mostra o título do menu/tela atual — e da barra de
 // preenchimento de valores editáveis (brilho, volume, repetições...).
-constexpr uint16_t UI_COR_CABECALHO = 0x8E7E;  // azul bebê (#89CFF0)
+constexpr uint16_t UI_COR_CABECALHO = 0xFD20;  // laranja (#FFA500)
+
+// Cor (RGB565) do texto do título, desenhado por cima de UI_COR_CABECALHO —
+// precisa contrastar com ela (preto contrasta melhor que branco com o
+// laranja acima).
+constexpr uint16_t UI_COR_TEXTO_CABECALHO = 0x0000;  // preto
 
 // Cor (RGB565) do fundo do item atualmente selecionado numa lista/menu/
 // teclado de texto. Deliberadamente diferente de UI_COR_CABECALHO acima,
 // para dar pra distinguir de relance "em que tela estou" (cabeçalho) de
 // "qual item está selecionado" (destaque da lista).
 constexpr uint16_t UI_COR_SELECIONADO = 0xFD20;  // laranja (#FFA500)
+
+// Cor (RGB565) do texto do item selecionado, desenhado por cima de
+// UI_COR_SELECIONADO — precisa contrastar com ela (branco contrasta melhor
+// que preto com o preto acima).
+constexpr uint16_t UI_COR_TEXTO_SELECIONADO = 0x0000;  // branco
 
 // Quando true, todo texto da IHM local é desenhado duas vezes — a segunda
 // com 1px de deslocamento horizontal — pra simular negrito ("double

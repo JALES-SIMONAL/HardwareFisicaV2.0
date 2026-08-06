@@ -24,14 +24,16 @@ namespace {
 constexpr int16_t TFT_LARGURA_NATIVA = 128;
 constexpr int16_t TFT_ALTURA_NATIVA = 160;
 constexpr uint16_t COR_FUNDO = 0x0000;
-// Cabeçalho e seleção vêm de MAIN.HPP (UI_COR_CABECALHO/UI_COR_SELECIONADO)
-// — ajustáveis ali sem precisar mexer neste arquivo.
+// Cabeçalho, título e seleção vêm de MAIN.HPP (UI_COR_CABECALHO/
+// UI_COR_TEXTO_CABECALHO/UI_COR_SELECIONADO/UI_COR_TEXTO_SELECIONADO) —
+// ajustáveis ali sem precisar mexer neste arquivo.
 constexpr uint16_t COR_CABECALHO = UI_COR_CABECALHO;
-constexpr uint16_t COR_TITULO = 0xFFFF;
+constexpr uint16_t COR_TITULO = UI_COR_TEXTO_CABECALHO;
 constexpr uint16_t COR_VALOR = 0xFFE0;
 constexpr uint16_t COR_RODAPE = 0xC618;
 constexpr uint16_t COR_TEXTO = 0xFFFF;
 constexpr uint16_t COR_SELECIONADO = UI_COR_SELECIONADO;
+constexpr uint16_t COR_TEXTO_SELECIONADO = UI_COR_TEXTO_SELECIONADO;
 
 // PWM do brilho da tela (TFT_BL). Centraliza canal/frequência/resolução.
 constexpr uint8_t BRILHO_PWM_CANAL = 0;
@@ -491,6 +493,13 @@ void desenharCabecalhoRodape(const char* titulo, const char* rodape) {
     char bufferTitulo[24];
     truncarTexto(bufferTitulo, sizeof(bufferTitulo), titulo,
                  largura - 2 * layout::uiMargin(), fonte);
+    // Título do cabeçalho sempre em maiúsculo — destaca "em que tela
+    // estou" — centralizado aqui em vez de escrever cada string de
+    // título já em maiúsculo em cada tela/chamador. Só ASCII simples
+    // (a-z); os títulos do firmware não usam acentos.
+    for (char* c = bufferTitulo; *c != '\0'; c++) {
+      if (*c >= 'a' && *c <= 'z') *c = static_cast<char>(*c - 'a' + 'A');
+    }
     display->setTextSize(fonte);
     display->setTextColor(COR_TITULO);
     imprimirTexto(layout::uiMargin(), alturaCabecalho / 2 - 4, bufferTitulo);
@@ -543,7 +552,7 @@ void desenharListaMenu(const char* titulo, const char* const* itens, uint8_t qua
                  display->width() - 2 * layout::uiMargin(), fonte);
 
     display->setTextSize(fonte);
-    display->setTextColor(selecionado ? COR_FUNDO : COR_TEXTO);
+    display->setTextColor(selecionado ? COR_TEXTO_SELECIONADO : COR_TEXTO);
     imprimirTexto(layout::uiMargin(), y, buffer);
   }
 
@@ -577,7 +586,7 @@ void desenharConfirmacao(const char* pergunta, uint8_t indiceSelecionado) {
       display->fillRect(0, y - 1, display->width(), layout::uiLineSpacing(), COR_SELECIONADO);
     }
     display->setTextSize(fonte);
-    display->setTextColor(selecionado ? COR_FUNDO : COR_TEXTO);
+    display->setTextColor(selecionado ? COR_TEXTO_SELECIONADO : COR_TEXTO);
     imprimirTexto(layout::uiMargin(), y, opcoes[i]);
   }
 
@@ -746,7 +755,7 @@ void desenharTecladoTexto(const char* nomeAtual, const char* const* rotulos, uin
     if (selecionado) {
       display->fillRect(x, y, larguraCelula - 1, alturaCelula - 1, COR_SELECIONADO);
     }
-    display->setTextColor(selecionado ? COR_FUNDO : COR_TEXTO);
+    display->setTextColor(selecionado ? COR_TEXTO_SELECIONADO : COR_TEXTO);
     imprimirTexto(x + 2, y + 2, rotulos[i]);
   }
 

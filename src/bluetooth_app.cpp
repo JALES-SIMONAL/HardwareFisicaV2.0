@@ -49,6 +49,13 @@ NimBLEServer* pServidor = nullptr;
 NimBLECharacteristic* pCaracteristicaTx = nullptr;
 NimBLEAdvertising* pAdvertising = nullptr;
 
+// true só depois de init() rodar por completo. loop() é chamada de dentro
+// de maquina_estados::tick() — inclusive numa chamada manual antecipada em
+// main.cpp/setup(), ANTES de bluetooth_app::init() (ver comentário lá) —
+// então loop() precisa dessa guarda pra não mexer em mutexBt/filaComandosBt
+// enquanto ainda são nullptr.
+bool iniciado = false;
+
 // Nome anunciado no BLE: carregado da NVS em init() (ou
 // NOME_DISPOSITIVO_BT_PADRAO, na primeira vez), trocável depois em tempo de
 // execução por definirNomeDispositivo().
@@ -288,6 +295,7 @@ void init() {
   pAdvertising->start();
 
   gerarDeviceId();
+  iniciado = true;
 }
 
 const char* nomeDispositivo() { return nomeDispositivoBuffer; }
@@ -333,6 +341,7 @@ void definirNomeDispositivo(const char* novoNome) {
 }
 
 void loop() {
+  if (!iniciado) return;
   TravaBt trava;
 
   const bool conectadoAgora = clienteConectado;

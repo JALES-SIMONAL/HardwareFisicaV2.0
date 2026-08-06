@@ -78,13 +78,28 @@ void setup() {
 
   experimentos::init();
 
-  Serial.println("[BOOT] Iniciando Bluetooth");
-  bluetooth_app::init();  // BLE (NimBLE): assíncrono, não bloqueia o restante
-  Serial.println("[BOOT] Bluetooth configurado");
-
   Serial.println("[BOOT] Iniciando maquina de estados");
   maquina_estados::init();
   Serial.println("[BOOT] Maquina de estados inicializada");
+
+  // Desenha a primeira tela de boot (logo Monkey Tech) JA, antes de
+  // bluetooth_app::init() (pilha NimBLE — a etapa mais lenta do boot,
+  // costuma levar centenas de ms). Sem isto, o display ficava preto (só
+  // com o fillScreen() de ihm::init()) por toda a duração do Bluetooth
+  // sendo inicializado, porque nada mais desenha na tela até
+  // maquina_estados::tick() rodar pela primeira vez dentro de loop() — ou
+  // seja, só depois do setup() inteiro (incluindo o Bluetooth) terminar.
+  // Chamar tick() manualmente aqui adianta esse primeiro desenho: a logo
+  // já fica visível enquanto o Bluetooth inicializa por baixo, escondendo
+  // essa espera dentro do tempo que a logo já ficaria na tela mesmo assim
+  // (BOOT_DURACAO_LOGO_MONKEY_TECH_MS). tick() chama bluetooth_app::loop()
+  // internamente, mas essa chamada não faz nada antes de
+  // bluetooth_app::init() rodar (ver guarda "iniciado" em bluetooth_app.cpp).
+  maquina_estados::tick();
+
+  Serial.println("[BOOT] Iniciando Bluetooth");
+  bluetooth_app::init();  // BLE (NimBLE): assíncrono, não bloqueia o restante
+  Serial.println("[BOOT] Bluetooth configurado");
 
   // No-op quando ENABLE_FIRMWARE_SELF_TESTS==0 (padrão); ver autoteste.hpp.
   // Os autotestes só verificam funções puras/isoláveis e nunca substituem

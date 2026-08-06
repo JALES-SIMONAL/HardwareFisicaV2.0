@@ -1870,9 +1870,9 @@ void atualizarBoot() {
         desenharLogoMonkeyTech();
         etapaBootDesenhada = true;
       }
-      // ~2s de exibição, contados a partir do desenho (BMP lido do SD é
-      // mais lento que texto; a tela nunca fica presa aqui).
-      if (decorrido >= 2000) avancarBoot(EtapaBoot::LogoUFRN);
+      // Contado a partir do desenho (BMP lido do SD é mais lento que
+      // texto; a tela nunca fica presa aqui).
+      if (decorrido >= BOOT_DURACAO_LOGO_MONKEY_TECH_MS) avancarBoot(EtapaBoot::LogoUFRN);
       break;
 
     case EtapaBoot::LogoUFRN:
@@ -1880,7 +1880,7 @@ void atualizarBoot() {
         desenharLogoUFRN();
         etapaBootDesenhada = true;
       }
-      if (decorrido >= 2000) avancarBoot(EtapaBoot::LedVermelho);
+      if (decorrido >= BOOT_DURACAO_LOGO_UFRN_MS) avancarBoot(EtapaBoot::LedVermelho);
       break;
 
     case EtapaBoot::LedVermelho:
@@ -1889,7 +1889,7 @@ void atualizarBoot() {
         Serial.println("[LEDS] Todos os 6 LEDs: VERMELHO");
         etapaBootDesenhada = true;
       }
-      if (decorrido >= 1000) avancarBoot(EtapaBoot::LedAzul);
+      if (decorrido >= BOOT_DURACAO_LED_VERMELHO_MS) avancarBoot(EtapaBoot::LedAzul);
       break;
 
     case EtapaBoot::LedAzul:
@@ -1898,7 +1898,7 @@ void atualizarBoot() {
         Serial.println("[LEDS] Todos os 6 LEDs: AZUL");
         etapaBootDesenhada = true;
       }
-      if (decorrido >= 1000) avancarBoot(EtapaBoot::LedVerde);
+      if (decorrido >= BOOT_DURACAO_LED_AZUL_MS) avancarBoot(EtapaBoot::LedVerde);
       break;
 
     case EtapaBoot::LedVerde:
@@ -1907,7 +1907,7 @@ void atualizarBoot() {
         Serial.println("[LEDS] Todos os 6 LEDs: VERDE");
         etapaBootDesenhada = true;
       }
-      if (decorrido >= 1000) avancarBoot(EtapaBoot::LedApagado);
+      if (decorrido >= BOOT_DURACAO_LED_VERDE_MS) avancarBoot(EtapaBoot::LedApagado);
       break;
 
     case EtapaBoot::LedApagado:
@@ -1918,7 +1918,7 @@ void atualizarBoot() {
         Serial.println("[LEDS] Controle entregue ao monitoramento dos canais");
         etapaBootDesenhada = true;
       }
-      if (decorrido >= 150) avancarBoot(EtapaBoot::Desenvolvedor);
+      if (decorrido >= BOOT_DURACAO_LED_APAGADO_MS) avancarBoot(EtapaBoot::Desenvolvedor);
       break;
 
     case EtapaBoot::Desenvolvedor:
@@ -1926,7 +1926,7 @@ void atualizarBoot() {
         desenharTelaDesenvolvedor();
         etapaBootDesenhada = true;
       }
-      if (decorrido >= 2000) avancarBoot(EtapaBoot::Concluido);
+      if (decorrido >= BOOT_DURACAO_DESENVOLVEDOR_MS) avancarBoot(EtapaBoot::Concluido);
       break;
 
     case EtapaBoot::Concluido:

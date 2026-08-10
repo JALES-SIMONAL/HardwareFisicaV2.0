@@ -19,6 +19,12 @@ bool iniciar(uint16_t totalRepeticoesSolicitadas);
 // fecha o arquivo de trabalho e passa para aguardandoNomeArquivo().
 void finalizarRepeticaoAtual();
 
+// Descarta só os eventos da repetição ATUAL (ainda não finalizada) e
+// reinicia a contagem/timestamp dela do zero — repetições anteriores já
+// finalizadas permanecem intactas no arquivo. Só tem efeito durante uma
+// repetição em andamento (emAndamento()==true); sem efeito em outra fase.
+void reiniciarRepeticaoAtual();
+
 // Cancela tudo: fecha e descarta o arquivo de trabalho.
 void cancelar();
 

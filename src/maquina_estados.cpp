@@ -7,6 +7,7 @@
 #include <qrcode.h>
 
 #include "MAIN.HPP"
+#include "analise_circular.hpp"
 #include "analise_dados.hpp"
 #include "aquisicao.hpp"
 #include "armazenamento.hpp"
@@ -364,6 +365,16 @@ int16_t indiceEventoInicialAnalise = -1;
 int64_t deltaTAnaliseUs = 0;
 float velocidadeAnaliseMs = 0.0f;
 
+// Parâmetros da análise de movimento circular, preservados entre as telas
+// de raio/vãos (cada uma edita e devolve um valor via edicaoValor, que é
+// compartilhado com as demais telas "valor + Voltar" do restante do
+// firmware) e usados para acionar analise_circular::calcular().
+int32_t analiseCircularRaioMm = 10;
+int32_t analiseCircularVaosQtd = 20;
+// 0 = gráfico de velocidade, 1 = gráfico de aceleração — alternado com
+// Next/Previous na tela Tela::AnaliseCircularGrafico.
+uint8_t analiseCircularPaginaGrafico = 0;
+
 // Estado da edição de valor (Brilho/Volume, e outras telas futuras que
 // seguem o mesmo padrão "valor + Voltar").
 struct EstadoEdicaoValor {
@@ -476,6 +487,7 @@ const char* nomeTela(Tela tela) {
     case Tela::ExperimentoRepeticoes: return "Repeticoes";
     case Tela::ExperimentoExecucao: return "Experimento";
     case Tela::ExperimentoCancelarConfirmar: return "Cancelar?";
+    case Tela::ExperimentoReiniciarConfirmar: return "Reiniciar?";
     case Tela::ExperimentoNomeArquivo: return "Nome do arquivo";
     case Tela::ExperimentoSobrescreverConfirmar: return "Sobrescrever?";
     case Tela::TesteCanais: return "Teste de canais";
@@ -487,10 +499,14 @@ const char* nomeTela(Tela tela) {
     case Tela::ConexaoApp: return "Conexao com app";
     case Tela::ConexaoAppRenomear: return "Renomear dispositivo BT";
     case Tela::AnaliseSelecionarArquivo: return "Selecionar arquivo";
-    case Tela::AnaliseSelecionarRepeticao: return "Selecionar repeticao";
+    case Tela::AnaliseTipo: return "Tipo de analise";
     case Tela::AnaliseEventos: return "Eventos";
     case Tela::AnaliseDistancia: return "Distancia";
     case Tela::AnaliseResultado: return "Resultado";
+    case Tela::AnaliseCircularRaio: return "Raio";
+    case Tela::AnaliseCircularVaos: return "Vaos";
+    case Tela::AnaliseCircularResultado: return "Resultado circular";
+    case Tela::AnaliseCircularGrafico: return "Grafico";
     default: return "Tela";
   }
 }
@@ -591,11 +607,22 @@ void tratarExperimentoRepeticoes(const Command& cmd) {
   }
 }
 
+// Itens da lista da tela de execução do experimento (ver
+// redesenharExperimentoExecucao()): 0=Finalizar repetição, 1=Reiniciar
+// repetição, 2=Cancelar experimento.
+constexpr uint8_t NUM_ITENS_EXPERIMENTO_EXECUCAO = 3;
+
 void tratarExperimentoExecucao(const Command& cmd) {
   switch (cmd.tipo) {
     case CommandType::Next:
+      estado.indiceSelecionado =
+          (estado.indiceSelecionado + 1) % NUM_ITENS_EXPERIMENTO_EXECUCAO;
+      precisaRedesenhar = true;
+      break;
     case CommandType::Previous:
-      estado.indiceSelecionado = (estado.indiceSelecionado == 0) ? 1 : 0;
+      estado.indiceSelecionado = (estado.indiceSelecionado == 0)
+                                      ? (NUM_ITENS_EXPERIMENTO_EXECUCAO - 1)
+                                      : (estado.indiceSelecionado - 1);
       precisaRedesenhar = true;
       break;
     case CommandType::Confirm:
@@ -613,6 +640,8 @@ void tratarExperimentoExecucao(const Command& cmd) {
         } else {
           precisaRedesenhar = true;
         }
+      } else if (estado.indiceSelecionado == 1) {
+        navegarPara(Tela::ExperimentoReiniciarConfirmar);
       } else {
         navegarPara(Tela::ExperimentoCancelarConfirmar);
       }
@@ -631,6 +660,19 @@ void confirmarCancelarExperimentoNao() { voltarUmNivel(); }
 
 void tratarExperimentoCancelarConfirmar(const Command& cmd) {
   tratarConfirmacaoBinaria(cmd, confirmarCancelarExperimentoSim, confirmarCancelarExperimentoNao);
+}
+
+void confirmarReiniciarRepeticaoSim() {
+  Serial.printf("[EXPERIMENTO] Reiniciando repeticao %u/%u\n",
+                static_cast<unsigned>(experimentos::repeticaoAtual()),
+                static_cast<unsigned>(experimentos::totalRepeticoes()));
+  experimentos::reiniciarRepeticaoAtual();
+  voltarUmNivel();
+}
+void confirmarReiniciarRepeticaoNao() { voltarUmNivel(); }
+
+void tratarExperimentoReiniciarConfirmar(const Command& cmd) {
+  tratarConfirmacaoBinaria(cmd, confirmarReiniciarRepeticaoSim, confirmarReiniciarRepeticaoNao);
 }
 
 void removerEspacosFinais(char* texto) {
@@ -911,8 +953,16 @@ void tratarAnaliseSelecionarArquivo(const Command& cmd) {
         std::strncpy(arquivoAnaliseNome, arquivosListados[estado.indiceSelecionado].nome,
                      sizeof(arquivoAnaliseNome) - 1);
         arquivoAnaliseNome[sizeof(arquivoAnaliseNome) - 1] = '\0';
-        navegarPara(Tela::AnaliseSelecionarRepeticao);
-        edicaoValor.valorTemp = 0;
+        // Sempre carrega a primeira (e, na prática, única) repetição do
+        // arquivo — a antiga tela "Selecionar repeticao" (pedir um índice
+        // 0..999 sem o usuário saber quantas repetições o arquivo tem) foi
+        // removida por não ter função real nesse fluxo local.
+        if (analise_dados::carregarRepeticao(arquivoAnaliseNome, 0) > 0) {
+          indiceEventoInicialAnalise = -1;
+          navegarPara(Tela::AnaliseTipo);
+        } else {
+          ihm::beep(150);
+        }
       }
       break;
     default:
@@ -920,44 +970,120 @@ void tratarAnaliseSelecionarArquivo(const Command& cmd) {
   }
 }
 
-void tratarAnaliseSelecionarRepeticao(const Command& cmd) {
-  constexpr int32_t MAX_REPETICAO_ANALISE = 999;
+// Escolha do tipo de análise para a repetição já carregada: 0 = análise
+// linear (fluxo existente: dois eventos + distância -> velocidade), 1 =
+// movimento circular (raio + vãos -> distância + gráficos de
+// velocidade/aceleração).
+void tratarAnaliseTipo(const Command& cmd) {
+  switch (cmd.tipo) {
+    case CommandType::Next:
+    case CommandType::Previous:
+      estado.indiceSelecionado = (estado.indiceSelecionado == 0) ? 1 : 0;
+      precisaRedesenhar = true;
+      break;
+    case CommandType::Confirm:
+      if (estado.indiceSelecionado == 0) {
+        indiceEventoInicialAnalise = -1;
+        navegarPara(Tela::AnaliseEventos);
+      } else {
+        navegarPara(Tela::AnaliseCircularRaio);
+      }
+      break;
+    default:
+      break;
+  }
+}
 
-  // Seletor "Repeticao: N / Voltar" — sem isto, esta tela só aceitava
-  // Back (nunca gerado pelo encoder local) para sair, deixando o usuário
-  // sem saída local caso a repetição escolhida não tenha eventos.
+constexpr int32_t ANALISE_CIRCULAR_RAIO_MIN_MM = 1;
+constexpr int32_t ANALISE_CIRCULAR_RAIO_MAX_MM = 500;
+constexpr int32_t ANALISE_CIRCULAR_VAOS_MIN = 1;
+constexpr int32_t ANALISE_CIRCULAR_VAOS_MAX = 200;
+
+void tratarAnaliseCircularRaio(const Command& cmd) {
+  // Seletor "Raio: N mm / Voltar" — mesmo padrão de tratarAnaliseDistancia.
   if (!edicaoValor.emEdicao) {
-    tratarSeletorValorComVoltar(cmd, edicaoValor.valorTemp);
+    tratarSeletorValorComVoltar(cmd, analiseCircularRaioMm);
     return;
   }
 
   switch (cmd.tipo) {
     case CommandType::Next:
-      if (edicaoValor.valorTemp < MAX_REPETICAO_ANALISE) edicaoValor.valorTemp++;
+      if (edicaoValor.valorTemp < ANALISE_CIRCULAR_RAIO_MAX_MM) edicaoValor.valorTemp++;
       precisaRedesenhar = true;
       break;
     case CommandType::Previous:
-      if (edicaoValor.valorTemp > 0) edicaoValor.valorTemp--;
+      if (edicaoValor.valorTemp > ANALISE_CIRCULAR_RAIO_MIN_MM) edicaoValor.valorTemp--;
+      precisaRedesenhar = true;
+      break;
+    case CommandType::Confirm:
+      analiseCircularRaioMm = edicaoValor.valorTemp;
+      navegarPara(Tela::AnaliseCircularVaos);
+      break;
+    case CommandType::Back:
+      edicaoValor.emEdicao = false;
+      precisaRedesenhar = true;
+      break;
+    default:
+      break;
+  }
+}
+
+void tratarAnaliseCircularVaos(const Command& cmd) {
+  if (!edicaoValor.emEdicao) {
+    tratarSeletorValorComVoltar(cmd, analiseCircularVaosQtd);
+    return;
+  }
+
+  switch (cmd.tipo) {
+    case CommandType::Next:
+      if (edicaoValor.valorTemp < ANALISE_CIRCULAR_VAOS_MAX) edicaoValor.valorTemp++;
+      precisaRedesenhar = true;
+      break;
+    case CommandType::Previous:
+      if (edicaoValor.valorTemp > ANALISE_CIRCULAR_VAOS_MIN) edicaoValor.valorTemp--;
       precisaRedesenhar = true;
       break;
     case CommandType::Confirm: {
-      const uint8_t qtd = analise_dados::carregarRepeticao(arquivoAnaliseNome,
-                                                             static_cast<uint16_t>(edicaoValor.valorTemp));
-      if (qtd > 0) {
-        indiceEventoInicialAnalise = -1;
-        navegarPara(Tela::AnaliseEventos);
-      } else {
-        // Repetição sem eventos: volta ao seletor (não fica preso em
-        // edição sem chance de escolher "Voltar").
-        ihm::beep(150);
-        edicaoValor.emEdicao = false;
-        precisaRedesenhar = true;
-      }
+      analiseCircularVaosQtd = edicaoValor.valorTemp;
+      const float raioMetros = static_cast<float>(analiseCircularRaioMm) / 1000.0f;
+      analise_circular::calcular(raioMetros, static_cast<uint16_t>(analiseCircularVaosQtd));
+      analiseCircularPaginaGrafico = 0;
+      navegarPara(Tela::AnaliseCircularResultado);
       break;
     }
     case CommandType::Back:
       edicaoValor.emEdicao = false;
       precisaRedesenhar = true;
+      break;
+    default:
+      break;
+  }
+}
+
+void tratarAnaliseCircularResultado(const Command& cmd) {
+  switch (cmd.tipo) {
+    case CommandType::Confirm:
+      analiseCircularPaginaGrafico = 0;
+      navegarPara(Tela::AnaliseCircularGrafico);
+      break;
+    case CommandType::Back:
+      voltarUmNivel();
+      break;
+    default:
+      break;
+  }
+}
+
+void tratarAnaliseCircularGrafico(const Command& cmd) {
+  switch (cmd.tipo) {
+    case CommandType::Next:
+    case CommandType::Previous:
+      analiseCircularPaginaGrafico = (analiseCircularPaginaGrafico == 0) ? 1 : 0;
+      precisaRedesenhar = true;
+      break;
+    case CommandType::Confirm:
+    case CommandType::Back:
+      voltarUmNivel();
       break;
     default:
       break;
@@ -1556,9 +1682,10 @@ void redesenharExperimentoExecucao() {
            static_cast<unsigned long>(experimentos::eventosNaRepeticaoAtual()),
            static_cast<long long>(tempoS));
 
-  const char* itens[2] = {"Finalizar repeticao", "Cancelar experimento"};
+  const char* itens[NUM_ITENS_EXPERIMENTO_EXECUCAO] = {"Finalizar repeticao", "Reiniciar repeticao",
+                                                        "Cancelar experimento"};
   uint8_t offsetFixo = 0;
-  ihm::desenharListaMenu(titulo, itens, 2, estado.indiceSelecionado, offsetFixo);
+  ihm::desenharListaMenu(titulo, itens, NUM_ITENS_EXPERIMENTO_EXECUCAO, estado.indiceSelecionado, offsetFixo);
 }
 
 // Rótulo curto (até 2 caracteres) por símbolo do alfabeto, para o teclado
@@ -1709,6 +1836,32 @@ void redesenharAnaliseResultado() {
   ihm::desenharMensagem("Resultado", mensagem);
 }
 
+void redesenharAnaliseTipo() {
+  static const char* const itens[2] = {"Analise linear", "Mov. circular"};
+  uint8_t offsetFixo = 0;
+  ihm::desenharListaMenu("Tipo de analise", itens, 2, estado.indiceSelecionado, offsetFixo);
+}
+
+void redesenharAnaliseCircularResultado() {
+  char linha1[32];
+  char linha2[32];
+  snprintf(linha1, sizeof(linha1), "Distancia: %.3fm",
+           static_cast<double>(analise_circular::distanciaTotalMetros()));
+  snprintf(linha2, sizeof(linha2), "Pontos: %u", static_cast<unsigned>(analise_circular::quantidadeVelocidades()));
+  const char* linhas[3] = {linha1, linha2, "KEY: ver graficos"};
+  ihm::desenharListaRolavel("Resultado", linhas, 3, 0);
+}
+
+void redesenharAnaliseCircularGrafico() {
+  if (analiseCircularPaginaGrafico == 0) {
+    ihm::desenharGrafico("Velocidade (m/s)", analise_circular::temposVelocidadeS(),
+                          analise_circular::velocidadesMs(), analise_circular::quantidadeVelocidades());
+  } else {
+    ihm::desenharGrafico("Aceleracao (m/s2)", analise_circular::temposAceleracaoS(),
+                          analise_circular::aceleracoesMs2(), analise_circular::quantidadeAceleracoes());
+  }
+}
+
 // Confirma, sem poluir a serial, que tick() continua rodando (útil para
 // descartar travamento após o boot/autotestes). Só imprime a cada 5s.
 void imprimirHeartbeat() {
@@ -1841,6 +1994,9 @@ void redesenharTelaAtual() {
     case Tela::ExperimentoCancelarConfirmar:
       ihm::desenharConfirmacao("Cancelar experimento?", estado.indiceSelecionado);
       break;
+    case Tela::ExperimentoReiniciarConfirmar:
+      ihm::desenharConfirmacao("Reiniciar repeticao?", estado.indiceSelecionado);
+      break;
     case Tela::ExperimentoNomeArquivo:
     case Tela::ArquivoRenomear:
     case Tela::ConexaoAppRenomear:
@@ -1874,8 +2030,8 @@ void redesenharTelaAtual() {
     case Tela::AnaliseSelecionarArquivo:
       redesenharAnaliseSelecionarArquivo();
       break;
-    case Tela::AnaliseSelecionarRepeticao:
-      redesenharValorComVoltar("Repeticao", edicaoValor.valorTemp, 0, 999);
+    case Tela::AnaliseTipo:
+      redesenharAnaliseTipo();
       break;
     case Tela::AnaliseEventos:
       redesenharAnaliseEventos();
@@ -1885,6 +2041,20 @@ void redesenharTelaAtual() {
       break;
     case Tela::AnaliseResultado:
       redesenharAnaliseResultado();
+      break;
+    case Tela::AnaliseCircularRaio:
+      redesenharValorComVoltar("Raio", analiseCircularRaioMm, ANALISE_CIRCULAR_RAIO_MIN_MM,
+                                ANALISE_CIRCULAR_RAIO_MAX_MM, "mm");
+      break;
+    case Tela::AnaliseCircularVaos:
+      redesenharValorComVoltar("Vaos", analiseCircularVaosQtd, ANALISE_CIRCULAR_VAOS_MIN,
+                                ANALISE_CIRCULAR_VAOS_MAX);
+      break;
+    case Tela::AnaliseCircularResultado:
+      redesenharAnaliseCircularResultado();
+      break;
+    case Tela::AnaliseCircularGrafico:
+      redesenharAnaliseCircularGrafico();
       break;
     default:
       ihm::desenharMensagem(nomeTela(estado.telaAtual), "Em construcao. KEY volta.");
@@ -2098,6 +2268,11 @@ void processarComando(const Command& cmd, Origem /*origem*/) {
       experimentos::finalizarRepeticaoAtual();
       precisaRedesenhar = true;
       return;
+    case CommandType::RestartRepetition:
+      Serial.println("[EXPERIMENTO] Reiniciando repeticao (comando Bluetooth)");
+      experimentos::reiniciarRepeticaoAtual();
+      precisaRedesenhar = true;
+      return;
     case CommandType::ListFiles:
       bluetooth_app::publicarListaArquivos();
       return;
@@ -2193,6 +2368,9 @@ void processarComando(const Command& cmd, Origem /*origem*/) {
     case Tela::ExperimentoCancelarConfirmar:
       tratarExperimentoCancelarConfirmar(cmd);
       break;
+    case Tela::ExperimentoReiniciarConfirmar:
+      tratarExperimentoReiniciarConfirmar(cmd);
+      break;
     case Tela::ExperimentoNomeArquivo:
     case Tela::ArquivoRenomear:
     case Tela::ConexaoAppRenomear:
@@ -2219,14 +2397,26 @@ void processarComando(const Command& cmd, Origem /*origem*/) {
     case Tela::AnaliseSelecionarArquivo:
       tratarAnaliseSelecionarArquivo(cmd);
       break;
-    case Tela::AnaliseSelecionarRepeticao:
-      tratarAnaliseSelecionarRepeticao(cmd);
+    case Tela::AnaliseTipo:
+      tratarAnaliseTipo(cmd);
       break;
     case Tela::AnaliseEventos:
       tratarAnaliseEventos(cmd);
       break;
     case Tela::AnaliseDistancia:
       tratarAnaliseDistancia(cmd);
+      break;
+    case Tela::AnaliseCircularRaio:
+      tratarAnaliseCircularRaio(cmd);
+      break;
+    case Tela::AnaliseCircularVaos:
+      tratarAnaliseCircularVaos(cmd);
+      break;
+    case Tela::AnaliseCircularResultado:
+      tratarAnaliseCircularResultado(cmd);
+      break;
+    case Tela::AnaliseCircularGrafico:
+      tratarAnaliseCircularGrafico(cmd);
       break;
     case Tela::Boot:
       break;

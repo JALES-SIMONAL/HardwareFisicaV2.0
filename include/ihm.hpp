@@ -89,6 +89,13 @@ void desenharListaRolavel(const char* titulo, const char* const* linhas,
 // Mensagem simples centralizada (avisos, telas de status).
 void desenharMensagem(const char* titulo, const char* mensagem);
 
+// Gráfico de linha simples: eixo X = tempo (segundos, "temposS"), eixo Y =
+// "valoresY" — ambos escalados automaticamente para caber inteiros na área
+// útil do display (entre cabeçalho e rodapé), sem paginação/zoom. "titulo"
+// já deve trazer a grandeza/unidade (ex.: "Velocidade (m/s)"); os valores
+// mínimo/máximo do eixo Y são escritos nos cantos da área do gráfico.
+void desenharGrafico(const char* titulo, const float* temposS, const float* valoresY, uint8_t quantidade);
+
 // Grade genérica de módulos booleanos (usada para desenhar QR Code sem que
 // ihm precise conhecer a biblioteca de geração — o chamador fornece um
 // callback que responde se o módulo (x,y) está "aceso").

@@ -26,6 +26,18 @@ uint16_t totalRepeticoesNum = 1;
 uint32_t eventosRepeticaoAtual = 0;
 int64_t inicioRepeticaoUs = 0;
 
+// Linhas CSV da repetição ATUAL (ainda não finalizada), acumuladas aqui em
+// vez de irem direto para armazenamento::enfileirarLinha() — só são
+// entregues ao módulo de armazenamento (e, portanto, gravadas no arquivo de
+// verdade) quando a repetição é finalizada (finalizarRepeticaoAtual()).
+// Isso é o que torna reiniciarRepeticaoAtual() simples e seguro: como nada
+// da repetição em andamento chegou a ser escrito no arquivo ainda, "reiniciar"
+// só precisa esquecer este buffer — nunca precisa desfazer uma escrita já
+// feita, então repetições anteriores (já finalizadas) nunca são tocadas.
+constexpr uint16_t MAX_LINHAS_BUFFER_REPETICAO = 300;
+char bufferLinhasRepeticao[MAX_LINHAS_BUFFER_REPETICAO][24];
+uint16_t quantidadeLinhasBuffer = 0;
+
 // Piscada de LED por evento válido: verde para transição L->H, vermelho
 // para H->L (indicação visual imediata de qual canal disparou e em que
 // direção, além do bipe e do registro no CSV). ledDesligarEmMs[i]==0
@@ -52,10 +64,19 @@ void aoReceberEventoValido(uint8_t canal1based, bool novoEstado, int64_t tempoUs
   if (!ativo) return;
 
   const int64_t tempoRelativoUs = tempoUs - inicio;
-  char linha[24];
-  snprintf(linha, sizeof(linha), "%u,%c,%lld", static_cast<unsigned>(canal1based),
-           novoEstado ? 'H' : 'L', static_cast<long long>(tempoRelativoUs));
-  armazenamento::enfileirarLinha(linha);
+
+  // Não escreve direto em armazenamento::enfileirarLinha() — a linha fica só
+  // no buffer RAM da repetição atual, e só é entregue de fato ao arquivo
+  // quando a repetição é finalizada (ver comentário no topo do arquivo).
+  portENTER_CRITICAL(&mux);
+  if (quantidadeLinhasBuffer < MAX_LINHAS_BUFFER_REPETICAO) {
+    snprintf(bufferLinhasRepeticao[quantidadeLinhasBuffer], 24, "%u,%c,%lld",
+             static_cast<unsigned>(canal1based), novoEstado ? 'H' : 'L',
+             static_cast<long long>(tempoRelativoUs));
+    quantidadeLinhasBuffer++;
+  }
+  portEXIT_CRITICAL(&mux);
+
   bluetooth_app::publicarEvento(canal1based, novoEstado ? 'H' : 'L', tempoRelativoUs);
   // Bipe curto de confirmação por evento válido (Fase 10): silencioso se
   // volume==0; curto de propósito para não atrapalhar eventos em sequência
@@ -102,6 +123,7 @@ bool iniciar(uint16_t totalRepeticoesSolicitadas) {
   repeticaoAtualNum = 1;
   totalRepeticoesNum = total;
   eventosRepeticaoAtual = 0;
+  quantidadeLinhasBuffer = 0;
   inicioRepeticaoUs = esp_timer_get_time();
   portEXIT_CRITICAL(&mux);
   return true;
@@ -115,6 +137,16 @@ void finalizarRepeticaoAtual() {
   portEXIT_CRITICAL(&mux);
 
   if (!ativo) return;
+
+  // Só agora as linhas acumuladas da repetição entram de fato na fila de
+  // gravação — até aqui elas existiam só no buffer RAM.
+  portENTER_CRITICAL(&mux);
+  const uint16_t quantidade = quantidadeLinhasBuffer;
+  quantidadeLinhasBuffer = 0;
+  portEXIT_CRITICAL(&mux);
+  for (uint16_t i = 0; i < quantidade; i++) {
+    armazenamento::enfileirarLinha(bufferLinhasRepeticao[i]);
+  }
 
   armazenamento::enfileirarLinhaEmBranco();
 
@@ -133,6 +165,20 @@ void finalizarRepeticaoAtual() {
   portEXIT_CRITICAL(&mux);
 }
 
+void reiniciarRepeticaoAtual() {
+  portENTER_CRITICAL(&mux);
+  const bool ativo = (fase == Fase::Executando);
+  if (ativo) {
+    // Nada da repetição atual chegou a ser escrito no arquivo (ver buffer no
+    // topo do arquivo) — "reiniciar" é só esquecer o buffer e zerar a
+    // contagem/tempo. Repetições anteriores já finalizadas não são tocadas.
+    quantidadeLinhasBuffer = 0;
+    eventosRepeticaoAtual = 0;
+    inicioRepeticaoUs = esp_timer_get_time();
+  }
+  portEXIT_CRITICAL(&mux);
+}
+
 void cancelar() {
   armazenamento::fecharArquivoAtual();
   char nomeComExtensao[24];
@@ -141,6 +187,7 @@ void cancelar() {
 
   portENTER_CRITICAL(&mux);
   fase = Fase::Inativo;
+  quantidadeLinhasBuffer = 0;
   portEXIT_CRITICAL(&mux);
 }
 

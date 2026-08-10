@@ -181,6 +181,8 @@ void processarLinha(char* linha) {
     cmd.tipo = comandos::CommandType::CancelExperiment;
   } else if (std::strcmp(acao, "finish_repetition") == 0) {
     cmd.tipo = comandos::CommandType::FinishRepetition;
+  } else if (std::strcmp(acao, "restart_repetition") == 0) {
+    cmd.tipo = comandos::CommandType::RestartRepetition;
   } else if (std::strcmp(acao, "reconnect") == 0) {
     reconectar();
     return;

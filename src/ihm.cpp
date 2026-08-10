@@ -793,6 +793,87 @@ void desenharMensagem(const char* titulo, const char* mensagem) {
   display->flush();
 }
 
+void desenharGrafico(const char* titulo, const float* temposS, const float* valoresY, uint8_t quantidade) {
+  if (!displayOk) return;
+  TravaBarramentoDisplay travaBus;
+
+  Serial.println("[IHM] Limpando tela em desenharGrafico()");
+  display->fillScreen(COR_FUNDO);
+  desenharCabecalhoRodape(titulo, "Gire: outro grafico");
+
+  const uint8_t fonte = layout::uiFontSize(1);
+
+  if (quantidade == 0 || temposS == nullptr || valoresY == nullptr) {
+    display->setTextSize(fonte);
+    display->setTextColor(COR_TEXTO);
+    imprimirTexto(layout::uiMargin(), layout::uiCenterY(), "Sem dados suficientes");
+    display->flush();
+    return;
+  }
+
+  float minY = valoresY[0];
+  float maxY = valoresY[0];
+  float minT = temposS[0];
+  float maxT = temposS[0];
+  for (uint8_t i = 1; i < quantidade; i++) {
+    if (valoresY[i] < minY) minY = valoresY[i];
+    if (valoresY[i] > maxY) maxY = valoresY[i];
+    if (temposS[i] < minT) minT = temposS[i];
+    if (temposS[i] > maxT) maxT = temposS[i];
+  }
+  // Evita divisao por zero quando todos os pontos tem o mesmo valor/tempo
+  // (ex.: um unico ponto) — nesse caso a serie fica desenhada como uma
+  // linha reta no meio da area do grafico.
+  const float faixaY = (maxY > minY) ? (maxY - minY) : 1.0f;
+  const float faixaT = (maxT > minT) ? (maxT - minT) : 1.0f;
+
+  const int16_t plotX0 = layout::uiMargin();
+  const int16_t plotX1 = display->width() - layout::uiMargin();
+  const int16_t plotY0 = layout::uiHeaderHeight() + layout::uiMargin();
+  const int16_t plotY1 = display->height() - layout::uiFooterHeight() - layout::uiMargin();
+  const int16_t plotLargura = plotX1 - plotX0;
+  const int16_t plotAltura = plotY1 - plotY0;
+  if (plotLargura <= 1 || plotAltura <= 1) {
+    display->flush();
+    return;
+  }
+
+  // Linha de referencia em y=0 — só desenhada quando o zero cai dentro da
+  // faixa observada (útil pra ver troca de sinal, ex.: aceleração negativa).
+  if (minY < 0.0f && maxY > 0.0f) {
+    const int16_t yZero = plotY1 - static_cast<int16_t>((0.0f - minY) / faixaY * (plotAltura - 1));
+    display->drawFastHLine(plotX0, yZero, plotLargura, COR_RODAPE);
+  }
+
+  int16_t xAnterior = 0;
+  int16_t yAnterior = 0;
+  for (uint8_t i = 0; i < quantidade; i++) {
+    const int16_t x = plotX0 + static_cast<int16_t>((temposS[i] - minT) / faixaT * (plotLargura - 1));
+    const int16_t y = plotY1 - static_cast<int16_t>((valoresY[i] - minY) / faixaY * (plotAltura - 1));
+    if (i > 0) {
+      display->drawLine(xAnterior, yAnterior, x, y, COR_VALOR);
+    }
+    display->fillRect(x - 1, y - 1, 3, 3, COR_VALOR);
+    xAnterior = x;
+    yAnterior = y;
+  }
+
+  // Valores minimo/maximo do eixo Y, nos cantos superior/inferior esquerdos
+  // da area do grafico (unica indicacao numerica da escala vertical — o
+  // eixo X so precisa caber a serie inteira, sem rotulo numerico, dado o
+  // pouco espaco do display).
+  char bufMax[12];
+  char bufMin[12];
+  snprintf(bufMax, sizeof(bufMax), "%.2f", static_cast<double>(maxY));
+  snprintf(bufMin, sizeof(bufMin), "%.2f", static_cast<double>(minY));
+  display->setTextSize(fonte);
+  display->setTextColor(COR_RODAPE);
+  imprimirTexto(plotX0 + 1, plotY0, bufMax);
+  imprimirTexto(plotX0 + 1, plotY1 - layout::uiLineSpacing(), bufMin);
+
+  display->flush();
+}
+
 bool desenharImagemBMP(const char* nomeComExtensao, int16_t x, int16_t y, int16_t larguraMaxima,
                        int16_t alturaMaxima) {
   if (!displayOk) return false;

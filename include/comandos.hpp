@@ -26,6 +26,7 @@ enum class CommandType : uint8_t {
   StopExperiment,
   CancelExperiment,
   FinishRepetition,
+  RestartRepetition,  // descarta so os eventos da repeticao atual (nao finalizada) e reinicia ela
   SetRepetitionCount,
   SetChannelMode,
   SetAllChannelsMode,

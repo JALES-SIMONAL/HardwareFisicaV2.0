@@ -93,7 +93,13 @@ constexpr uint8_t BUZZER_PIN = 13;
 // Filas, buffers e limites configuraveis
 // ---------------------------------------------------------------------
 // Tamanho da fila de linhas CSV prontas (aquisicao -> tarefa de armazenamento).
-constexpr uint16_t CSV_LINE_QUEUE_LEN = 64;
+// Precisa caber uma repeticao inteira de uma vez: finalizarRepeticaoAtual()
+// (experimentos.cpp) enfileira todas as linhas acumuladas da repeticao
+// (ate MAX_LINHAS_BUFFER_REPETICAO) mais a linha em branco separadora numa
+// rajada só, sem ceder a CPU entre elas. Se a fila fosse menor que isso, o
+// excesso falhava silenciosamente ao enfileirar (xQueueSend com timeout 0),
+// perdendo eventos de repeticoes com muitos eventos.
+constexpr uint16_t CSV_LINE_QUEUE_LEN = 320;
 // Quantidade de linhas acumuladas no buffer antes de um flush no microSD.
 constexpr uint16_t STORAGE_FLUSH_THRESHOLD = 16;
 // Quantidade maxima de repeticoes permitida em um experimento livre.

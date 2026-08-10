@@ -32,6 +32,7 @@ enum class Tela : uint8_t {
   ExperimentoRepeticoes,
   ExperimentoExecucao,
   ExperimentoCancelarConfirmar,
+  ExperimentoReiniciarConfirmar,
   ExperimentoNomeArquivo,
   ExperimentoSobrescreverConfirmar,
   TesteCanais,
@@ -45,10 +46,15 @@ enum class Tela : uint8_t {
   ConexaoAppRenomear,
 
   AnaliseSelecionarArquivo,
-  AnaliseSelecionarRepeticao,
+  AnaliseTipo,
   AnaliseEventos,
   AnaliseDistancia,
-  AnaliseResultado
+  AnaliseResultado,
+
+  AnaliseCircularRaio,
+  AnaliseCircularVaos,
+  AnaliseCircularResultado,
+  AnaliseCircularGrafico
 };
 
 void init();

@@ -155,8 +155,40 @@ void descarregarBufferInterno() {
   linhasNoBuffer = 0;
 }
 
+// Só chamar já com mutexArquivo tomado. Retira um item de filaLinhas (se
+// houver) e o coloca no buffer, descarregando-o se encher. Retorna false
+// quando a fila estava vazia (nada para fazer).
+bool processarUmItemFilaInterno() {
+  if (filaLinhas == nullptr) return false;
+
+  LinhaCSV item;
+  if (xQueueReceive(filaLinhas, &item, 0) != pdTRUE) return false;
+
+  if (arquivoAberto) {
+    std::strncpy(bufferFlush[linhasNoBuffer], item.texto, sizeof(bufferFlush[linhasNoBuffer]) - 1);
+    bufferFlush[linhasNoBuffer][sizeof(bufferFlush[linhasNoBuffer]) - 1] = '\0';
+    linhasNoBuffer++;
+
+    if (linhasNoBuffer >= STORAGE_FLUSH_THRESHOLD) descarregarBufferInterno();
+  }
+  return true;
+}
+
 // Só chamar já com mutexArquivo tomado.
 void fecharArquivoAtualInterno() {
+  // Esvazia filaLinhas ANTES de fechar. Sem isto havia uma corrida entre
+  // esta função e processarFila() (tarefa separada, núcleo 0): quando
+  // finalizarRepeticaoAtual() enfileira as linhas da ÚLTIMA repetição e, em
+  // seguida, chama fecharArquivoAtual() (ver experimentos.cpp), o fecho
+  // podia acontecer antes de processarFila() rodar de novo e drenar essas
+  // linhas — o arquivo fechava (arquivoAberto=false) e, quando
+  // processarFila() finalmente processava os itens já enfileirados, o
+  // "if (arquivoAberto)" os descartava silenciosamente. Isso perdia sempre
+  // os dados da última repetição de cada experimento, nunca os das
+  // repetições anteriores (essas nunca corriam contra um fechamento
+  // imediato de arquivo).
+  while (processarUmItemFilaInterno()) {
+  }
   descarregarBufferInterno();
   if (arquivoAberto) arquivoAtual.close();
   arquivoAberto = false;
@@ -266,24 +298,20 @@ void enfileirarLinhaEmBranco() { enfileirarLinha(""); }
 void processarFila() {
   if (filaLinhas == nullptr) return;
 
-  LinhaCSV item;
-  while (xQueueReceive(filaLinhas, &item, 0) == pdTRUE) {
+  while (true) {
     // Toma o barramento antes do mutexArquivo (mesma ordem em toda função
     // desta unidade) e o reivindica para o SD — o buffer só acumula em
     // RAM na maioria das iterações, mas o flush real (a cada
     // STORAGE_FLUSH_THRESHOLD linhas) precisa do barramento já roteado.
+    // Um item por vez (em vez de drenar a fila inteira sob um único lock)
+    // para não segurar o barramento SPI por muito tempo e atrasar o
+    // display, que também disputa esse barramento.
     TravaBarramentoSD travaBus;
     xSemaphoreTake(mutexArquivo, portMAX_DELAY);
-
-    if (arquivoAberto) {
-      std::strncpy(bufferFlush[linhasNoBuffer], item.texto, sizeof(bufferFlush[linhasNoBuffer]) - 1);
-      bufferFlush[linhasNoBuffer][sizeof(bufferFlush[linhasNoBuffer]) - 1] = '\0';
-      linhasNoBuffer++;
-
-      if (linhasNoBuffer >= STORAGE_FLUSH_THRESHOLD) descarregarBufferInterno();
-    }
-
+    const bool processouAlgo = processarUmItemFilaInterno();
     xSemaphoreGive(mutexArquivo);
+
+    if (!processouAlgo) break;
   }
 }
 

@@ -6,7 +6,9 @@
 // analise_dados::carregarRepeticao() (um evento por "vão" do encoder
 // passando pelo sensor), calcula a distância linear percorrida e as séries
 // de velocidade/aceleração ao longo do tempo. Não lê o arquivo diretamente —
-// reaproveita os eventos que analise_dados já tem em RAM.
+// reaproveita os eventos que analise_dados já tem em RAM. calcularMedia*()
+// são exceção: essas leem o arquivo diretamente (via analise_dados), pois
+// precisam percorrer TODAS as repetições, não só a carregada no momento.
 namespace analise_circular {
 
 // Recalcula tudo a partir dos eventos atualmente carregados em
@@ -46,5 +48,37 @@ const float* rpmValores();
 float velocidadeMediaMs();
 float aceleracaoMediaMs2();
 float rpmMedia();
+
+// ---------------------------------------------------------------------
+// Médias entre repetições do mesmo arquivo
+// ---------------------------------------------------------------------
+
+// Recarrega e recalcula CADA uma das "totalRepeticoes" repetições de
+// "nomeArquivo" (via analise_dados::carregarRepeticao() + calcular()) e faz
+// a média simples dos quatro valores-resumo entre as repetições que tiveram
+// dados suficientes (cada repetição pesa igual, independente de quantos
+// eventos teve). Sobrescreve o que estava carregado em analise_dados/os
+// arrays por-ponto (com os da ÚLTIMA repetição processada) — quem quiser o
+// valor por-ponto de uma repetição específica deve carregá-la de novo
+// depois. Retorna quantas repetições entraram na média (0 se nenhuma).
+uint16_t calcularMediaRepeticoes(const char* nomeArquivo, uint16_t totalRepeticoes, float raioMetros,
+                                  uint16_t vaos);
+
+float distanciaMediaRepeticoesMetros();
+float velocidadeMediaRepeticoesMs();
+float aceleracaoMediaRepeticoesMs2();
+float rpmMediaRepeticoes();
+
+// Calcula a curva média (velocidade/aceleração/RPM ponto a ponto) entre as
+// "totalRepeticoes" repetições de "nomeArquivo", alinhada por ÍNDICE (não
+// por tempo) e truncada no menor número de pontos entre as repetições com
+// dados válidos — assume que todas partem do mesmo ponto físico do
+// encoder, então o ponto i de cada repetição corresponde ao mesmo vão.
+// Sobrescreve os mesmos arrays/valores-resumo de calcular() (os getters
+// acima passam a refletir a média em vez de uma repetição só). Retorna
+// false (e zera os resultados) se nenhuma repetição tiver ao menos 2
+// eventos.
+bool calcularMediaGrafico(const char* nomeArquivo, uint16_t totalRepeticoes, float raioMetros,
+                           uint16_t vaos);
 
 }  // namespace analise_circular

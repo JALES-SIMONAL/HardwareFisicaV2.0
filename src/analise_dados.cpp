@@ -52,6 +52,34 @@ uint8_t carregarRepeticao(const char* nomeComExtensao, uint16_t indiceRepeticao)
   return quantidadeCarregada;
 }
 
+uint16_t contarRepeticoes(const char* nomeComExtensao) {
+  if (!armazenamento::abrirParaLeitura(nomeComExtensao)) return 0;
+
+  char linha[32];
+  uint16_t quantidade = 0;
+  bool blocoAtualTemDados = false;
+
+  while (armazenamento::lerProximaLinha(linha, sizeof(linha))) {
+    if (linha[0] == '\0') {
+      if (blocoAtualTemDados) quantidade++;
+      blocoAtualTemDados = false;
+      continue;
+    }
+
+    unsigned canal = 0;
+    char estado = '\0';
+    long long tempoUs = 0;
+    if (std::sscanf(linha, "%u,%c,%lld", &canal, &estado, &tempoUs) == 3) {
+      blocoAtualTemDados = true;
+    }
+  }
+  // Último bloco pode não ter linha em branco final (fim de arquivo).
+  if (blocoAtualTemDados) quantidade++;
+
+  armazenamento::fecharLeitura();
+  return quantidade;
+}
+
 uint8_t quantidadeEventosCarregados() { return quantidadeCarregada; }
 
 const EventoLido& evento(uint8_t indice) {

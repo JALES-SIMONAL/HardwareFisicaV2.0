@@ -371,9 +371,22 @@ float velocidadeAnaliseMs = 0.0f;
 // firmware) e usados para acionar analise_circular::calcular().
 int32_t analiseCircularRaioMm = 10;
 int32_t analiseCircularVaosQtd = 20;
-// 0 = gráfico de velocidade, 1 = gráfico de aceleração — alternado com
-// Next/Previous na tela Tela::AnaliseCircularGrafico.
+// Qual gráfico mostrar em Tela::AnaliseCircularGrafico — ver constantes
+// PAGINA_GRAFICO_* (velocidade/aceleração/RPM), definidas perto de
+// tratarAnaliseCircularResultado(). Escolhido antes de navegar pra lá, na
+// tela de resultado (cada gráfico é uma opção separada da lista).
 uint8_t analiseCircularPaginaGrafico = 0;
+
+// Quantidade de repetições do arquivo em análise (analise_dados::
+// contarRepeticoes(), calculada uma vez em "Calcular") — usada pra montar a
+// lista de Tela::AnaliseCircularEscolherRepeticao ("Rep 1".."Rep N",
+// "Media"); inclui blocos sem eventos suficientes (o usuário ainda pode
+// escolhê-los, o gráfico só mostra "sem dados"). analiseCircularRepeticoesValidas
+// é quantas delas de fato entraram na média dos valores-resumo (ver
+// analise_circular::calcularMediaRepeticoes()) — só pra exibição, sempre
+// <= analiseCircularTotalRepeticoes.
+uint16_t analiseCircularTotalRepeticoes = 0;
+uint16_t analiseCircularRepeticoesValidas = 0;
 
 // Estado da edição de valor (Brilho/Volume, e outras telas futuras que
 // seguem o mesmo padrão "valor + Voltar").
@@ -505,6 +518,7 @@ const char* nomeTela(Tela tela) {
     case Tela::AnaliseResultado: return "Resultado";
     case Tela::AnaliseCircularRaioVaos: return "Raio e vaos";
     case Tela::AnaliseCircularResultado: return "Resultado circular";
+    case Tela::AnaliseCircularEscolherRepeticao: return "Qual repeticao?";
     case Tela::AnaliseCircularGrafico: return "Grafico";
     default: return "Tela";
   }
@@ -1049,8 +1063,20 @@ void tratarAnaliseCircularRaioVaos(const Command& cmd) {
           precisaRedesenhar = true;
         } else if (estado.indiceSelecionado == ITEM_CIRCULAR_CALCULAR) {
           const float raioMetros = static_cast<float>(analiseCircularRaioMm) / 1000.0f;
-          analise_circular::calcular(raioMetros, static_cast<uint16_t>(analiseCircularVaosQtd));
-          analiseCircularPaginaGrafico = 0;
+          const uint16_t vaos = static_cast<uint16_t>(analiseCircularVaosQtd);
+          // Os valores-resumo mostrados no resultado são a média entre
+          // TODAS as repetições do arquivo, não só a que estava carregada
+          // — cada repetição pesa igual, independente de quantos eventos
+          // teve (ver analise_circular::calcularMediaRepeticoes()). Limita
+          // a MAX_REPETICOES (mesmo teto de experimentos::iniciar()): é o
+          // tamanho do buffer da lista "qual repeticao" (ver
+          // redesenharAnaliseCircularEscolherRepeticao()).
+          analiseCircularTotalRepeticoes = analise_dados::contarRepeticoes(arquivoAnaliseNome);
+          if (analiseCircularTotalRepeticoes > MAX_REPETICOES) {
+            analiseCircularTotalRepeticoes = MAX_REPETICOES;
+          }
+          analiseCircularRepeticoesValidas = analise_circular::calcularMediaRepeticoes(
+              arquivoAnaliseNome, analiseCircularTotalRepeticoes, raioMetros, vaos);
           navegarPara(Tela::AnaliseCircularResultado);
         } else if (estado.indiceSelecionado == ITEM_CIRCULAR_VOLTAR) {
           voltarUmNivel();
@@ -1100,11 +1126,14 @@ void tratarAnaliseCircularRaioVaos(const Command& cmd) {
 }
 
 // Itens da lista da tela de resultado (ver redesenharAnaliseCircularResultado()):
-// os cinco primeiros (distancia, pontos, vel. media, acel. media, rpm
-// medio) são só informativos — Confirm neles não faz nada, mesmo padrão de
+// os cinco primeiros (distancia, repeticoes, vel. media, acel. media, rpm
+// medio — média entre TODAS as repetições do arquivo) são só informativos
+// — Confirm neles não faz nada, mesmo padrão de
 // tratarArquivoDados()/tratarConfigCanaisVisualizar(); os três gráficos são
-// opções separadas (não uma única tela alternada por rotação) e "Voltar"
-// fecha a análise.
+// opções separadas (não uma única tela alternada por rotação); cada uma
+// abre Tela::AnaliseCircularEscolherRepeticao antes de plotar, pra
+// perguntar de qual repetição (ou da média entre elas) vem a curva.
+// "Voltar" fecha a análise.
 constexpr uint8_t QTD_ANALISE_CIRCULAR_RESULTADO = 9;
 constexpr uint8_t ITEM_CIRCULAR_RESULTADO_GRAFICO_VELOCIDADE = 5;
 constexpr uint8_t ITEM_CIRCULAR_RESULTADO_GRAFICO_ACELERACAO = 6;
@@ -1131,17 +1160,59 @@ void tratarAnaliseCircularResultado(const Command& cmd) {
     case CommandType::Confirm:
       if (estado.indiceSelecionado == ITEM_CIRCULAR_RESULTADO_GRAFICO_VELOCIDADE) {
         analiseCircularPaginaGrafico = PAGINA_GRAFICO_VELOCIDADE;
-        navegarPara(Tela::AnaliseCircularGrafico);
+        navegarPara(Tela::AnaliseCircularEscolherRepeticao);
       } else if (estado.indiceSelecionado == ITEM_CIRCULAR_RESULTADO_GRAFICO_ACELERACAO) {
         analiseCircularPaginaGrafico = PAGINA_GRAFICO_ACELERACAO;
-        navegarPara(Tela::AnaliseCircularGrafico);
+        navegarPara(Tela::AnaliseCircularEscolherRepeticao);
       } else if (estado.indiceSelecionado == ITEM_CIRCULAR_RESULTADO_GRAFICO_RPM) {
         analiseCircularPaginaGrafico = PAGINA_GRAFICO_RPM;
-        navegarPara(Tela::AnaliseCircularGrafico);
+        navegarPara(Tela::AnaliseCircularEscolherRepeticao);
       } else if (estado.indiceSelecionado == ITEM_CIRCULAR_RESULTADO_VOLTAR) {
         voltarUmNivel();
       }
       break;
+    case CommandType::Back:
+      voltarUmNivel();
+      break;
+    default:
+      break;
+  }
+}
+
+// Escolha de qual repetição vira o gráfico (analiseCircularPaginaGrafico já
+// foi escolhido em tratarAnaliseCircularResultado()): itens 0..N-1 = "Rep
+// 1".."Rep N", item N = "Media" (analise_circular::calcularMediaGrafico()),
+// item N+1 = "Voltar".
+void tratarAnaliseCircularEscolherRepeticao(const Command& cmd) {
+  const uint16_t qtd = analiseCircularTotalRepeticoes + 2;
+  const uint16_t itemMedia = analiseCircularTotalRepeticoes;
+  const uint16_t itemVoltar = analiseCircularTotalRepeticoes + 1;
+
+  switch (cmd.tipo) {
+    case CommandType::Next:
+      estado.indiceSelecionado = (estado.indiceSelecionado + 1) % qtd;
+      precisaRedesenhar = true;
+      break;
+    case CommandType::Previous:
+      estado.indiceSelecionado = (estado.indiceSelecionado == 0) ? (qtd - 1) : (estado.indiceSelecionado - 1);
+      precisaRedesenhar = true;
+      break;
+    case CommandType::Confirm: {
+      const float raioMetros = static_cast<float>(analiseCircularRaioMm) / 1000.0f;
+      const uint16_t vaos = static_cast<uint16_t>(analiseCircularVaosQtd);
+      if (estado.indiceSelecionado == itemMedia) {
+        analise_circular::calcularMediaGrafico(arquivoAnaliseNome, analiseCircularTotalRepeticoes,
+                                                raioMetros, vaos);
+        navegarPara(Tela::AnaliseCircularGrafico);
+      } else if (estado.indiceSelecionado == itemVoltar) {
+        voltarUmNivel();
+      } else {
+        analise_dados::carregarRepeticao(arquivoAnaliseNome, estado.indiceSelecionado);
+        analise_circular::calcular(raioMetros, vaos);
+        navegarPara(Tela::AnaliseCircularGrafico);
+      }
+      break;
+    }
     case CommandType::Back:
       voltarUmNivel();
       break;
@@ -1937,26 +2008,44 @@ void redesenharAnaliseCircularRaioVaos() {
 
 void redesenharAnaliseCircularResultado() {
   char itemDistancia[32];
-  char itemPontos[32];
+  char itemRepeticoes[32];
   char itemVelocidade[32];
   char itemAceleracao[32];
   char itemRpm[32];
+  // Valores-resumo são a média entre todas as repetições do arquivo (ver
+  // analise_circular::calcularMediaRepeticoes(), chamada em "Calcular").
   snprintf(itemDistancia, sizeof(itemDistancia), "Distancia: %.3fm",
-           static_cast<double>(analise_circular::distanciaTotalMetros()));
-  snprintf(itemPontos, sizeof(itemPontos), "Pontos: %u",
-           static_cast<unsigned>(analise_circular::quantidadeVelocidades()));
+           static_cast<double>(analise_circular::distanciaMediaRepeticoesMetros()));
+  snprintf(itemRepeticoes, sizeof(itemRepeticoes), "Repeticoes: %u/%u",
+           static_cast<unsigned>(analiseCircularRepeticoesValidas),
+           static_cast<unsigned>(analiseCircularTotalRepeticoes));
   snprintf(itemVelocidade, sizeof(itemVelocidade), "Vel. media: %.2fm/s",
-           static_cast<double>(analise_circular::velocidadeMediaMs()));
+           static_cast<double>(analise_circular::velocidadeMediaRepeticoesMs()));
   snprintf(itemAceleracao, sizeof(itemAceleracao), "Acel. media: %.2fm/s2",
-           static_cast<double>(analise_circular::aceleracaoMediaMs2()));
+           static_cast<double>(analise_circular::aceleracaoMediaRepeticoesMs2()));
   snprintf(itemRpm, sizeof(itemRpm), "RPM medio: %.1f",
-           static_cast<double>(analise_circular::rpmMedia()));
+           static_cast<double>(analise_circular::rpmMediaRepeticoes()));
 
   const char* itens[QTD_ANALISE_CIRCULAR_RESULTADO] = {
-      itemDistancia, itemPontos, itemVelocidade, itemAceleracao, itemRpm,
+      itemDistancia, itemRepeticoes, itemVelocidade, itemAceleracao, itemRpm,
       "Ver grafico veloc.", "Ver grafico acel.", "Ver grafico rpm", "Voltar"};
 
   ihm::desenharListaMenu("Resultado", itens, QTD_ANALISE_CIRCULAR_RESULTADO, estado.indiceSelecionado,
+                          estado.offsetRolagem);
+}
+
+void redesenharAnaliseCircularEscolherRepeticao() {
+  char buffers[MAX_REPETICOES][10];
+  const char* itens[MAX_REPETICOES + 2];
+  for (uint16_t i = 0; i < analiseCircularTotalRepeticoes; i++) {
+    snprintf(buffers[i], sizeof(buffers[i]), "Rep %u", static_cast<unsigned>(i + 1));
+    itens[i] = buffers[i];
+  }
+  itens[analiseCircularTotalRepeticoes] = "Media";
+  itens[analiseCircularTotalRepeticoes + 1] = "Voltar";
+
+  ihm::desenharListaMenu("Qual repeticao?", itens,
+                          static_cast<uint8_t>(analiseCircularTotalRepeticoes + 2), estado.indiceSelecionado,
                           estado.offsetRolagem);
 }
 
@@ -2158,6 +2247,9 @@ void redesenharTelaAtual() {
       break;
     case Tela::AnaliseCircularResultado:
       redesenharAnaliseCircularResultado();
+      break;
+    case Tela::AnaliseCircularEscolherRepeticao:
+      redesenharAnaliseCircularEscolherRepeticao();
       break;
     case Tela::AnaliseCircularGrafico:
       redesenharAnaliseCircularGrafico();
@@ -2517,6 +2609,9 @@ void processarComando(const Command& cmd, Origem /*origem*/) {
       break;
     case Tela::AnaliseCircularResultado:
       tratarAnaliseCircularResultado(cmd);
+      break;
+    case Tela::AnaliseCircularEscolherRepeticao:
+      tratarAnaliseCircularEscolherRepeticao(cmd);
       break;
     case Tela::AnaliseCircularGrafico:
       tratarAnaliseCircularGrafico(cmd);

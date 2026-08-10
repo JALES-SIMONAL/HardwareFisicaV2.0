@@ -21,6 +21,12 @@ struct EventoLido {
 // o arquivo/repetição não existir ou o cartão estiver indisponível).
 uint8_t carregarRepeticao(const char* nomeComExtensao, uint16_t indiceRepeticao);
 
+// Conta quantos blocos de repetição (separados por linha em branco, com
+// pelo menos uma linha de dados válida) existem no arquivo. Não usa nem
+// altera o estado de carregarRepeticao()/evento() — leitura sequencial
+// própria, independente. 0 se o arquivo/cartão estiver indisponível.
+uint16_t contarRepeticoes(const char* nomeComExtensao);
+
 uint8_t quantidadeEventosCarregados();
 const EventoLido& evento(uint8_t indice);
 

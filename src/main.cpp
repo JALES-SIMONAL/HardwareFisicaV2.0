@@ -16,19 +16,22 @@
 
 namespace {
 
-// Núcleo 0: drena a fila de eventos brutos da ISR de aquisição (aplicando
-// o filtro de borda) e, em seguida, descarrega a fila de linhas CSV para o
-// microSD. As duas etapas ficam na mesma tarefa de propósito: ambas usam
-// filas FreeRTOS (thread-safe) para se desacoplar da ISR e da IHM, e a
-// escrita no cartão é sempre em blocos pequenos e limitados
-// (STORAGE_FLUSH_THRESHOLD linhas), então nunca atrasa a próxima leitura de
-// evento por muito tempo — sem precisar de duas tarefas separadas.
+// Núcleo 0: lê os canais de sensores por polling (aquisicao.cpp; sem
+// interrupção nem fila — ver comentário lá) e, em seguida, descarrega a
+// fila de linhas CSV para o microSD. As duas etapas ficam na mesma tarefa
+// de propósito: a escrita no cartão é sempre em blocos pequenos e
+// limitados (STORAGE_FLUSH_THRESHOLD linhas), então nunca atrasa a próxima
+// leitura dos canais por muito tempo — sem precisar de duas tarefas
+// separadas. vTaskDelay(1) (o mínimo do FreeRTOS, ~1ms) em vez de um
+// intervalo maior: quanto mais frequente o polling, menor a chance de
+// perder uma transição rápida entre duas leituras — só cede o núcleo o
+// suficiente para não disparar o watchdog, sem atraso artificial.
 void tarefaAquisicaoArmazenamento(void* /*parametro*/) {
   for (;;) {
     aquisicao::processarFilaEventos();
     armazenamento::processarFila();
     experimentos::atualizarLedsPiscando();
-    vTaskDelay(pdMS_TO_TICKS(2));
+    vTaskDelay(1);
   }
 }
 

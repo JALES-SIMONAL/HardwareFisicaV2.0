@@ -2,8 +2,6 @@
 
 #include <Arduino.h>
 #include <esp_timer.h>
-#include <freertos/FreeRTOS.h>
-#include <freertos/queue.h>
 
 #include "MAIN.HPP"
 #include "canais.hpp"
@@ -12,61 +10,19 @@ namespace aquisicao {
 
 namespace {
 
-struct RawEdgeEvent {
-  uint8_t canal0based;
-  bool estadoAnterior;
-  bool estadoNovo;
-  int64_t tempoUs;
-};
-
-QueueHandle_t filaEventosBrutos = nullptr;
-
-// Acessados pela ISR: nível "cru" mais recente e contador de mudanças por
-// canal. São contadores/flags simples de melhor esforço para a UI — não
-// exigem seção crítica porque cada canal só é escrito pela sua própria ISR.
+// Nível "cru" mais recente e contador de mudanças por canal. Escritos só
+// por processarFilaEventos() (núcleo 0), lidos por outras funções deste
+// módulo a partir de qualquer núcleo (ex.: tela de teste de canais, no
+// núcleo 1) — volatile por causa dessa leitura entre núcleos, não por
+// causa de uma ISR (não há mais nenhuma neste arquivo).
 volatile bool niveisAtuais[NUM_CHANNELS] = {};
 volatile uint32_t contadoresMudancas[NUM_CHANNELS] = {};
 
-// Timestamp (esp_timer_get_time()) da última transição ACEITA de cada
-// canal — usado só para o filtro de debounce abaixo, não confundir com
-// niveisAtuais/contadoresMudancas (que refletem o nível bruto do pino).
-volatile int64_t ultimoEventoAceitoUs[NUM_CHANNELS] = {};
-
 CallbackEventoValido callbackEventoValido = nullptr;
-
-void IRAM_ATTR isrCanal(void* arg) {
-  const uint8_t indice0based = static_cast<uint8_t>(reinterpret_cast<uintptr_t>(arg));
-  const int64_t tempoUs = esp_timer_get_time();
-
-  // Debounce: ignora qualquer transição que aconteça a menos de
-  // SENSOR_DEBOUNCE_US da última transição aceita neste canal — filtra
-  // ruído elétrico rápido/bounce mecânico sem exigir um timer separado.
-  // Deliberadamente simples (só compara timestamps) para manter a ISR
-  // curta; uma transição real e uma de ruído próximas no tempo demais
-  // para o sensor em uso podem exigir ajustar SENSOR_DEBOUNCE_US.
-  if ((tempoUs - ultimoEventoAceitoUs[indice0based]) < static_cast<int64_t>(SENSOR_DEBOUNCE_US)) {
-    return;
-  }
-
-  const bool estadoAnterior = niveisAtuais[indice0based];
-  const bool estadoNovo = digitalRead(CHANNEL_PINS[indice0based]) == HIGH;
-
-  niveisAtuais[indice0based] = estadoNovo;
-  contadoresMudancas[indice0based]++;
-  ultimoEventoAceitoUs[indice0based] = tempoUs;
-
-  RawEdgeEvent evento{indice0based, estadoAnterior, estadoNovo, tempoUs};
-
-  BaseType_t despertouTarefaMaisPrioritaria = pdFALSE;
-  xQueueSendFromISR(filaEventosBrutos, &evento, &despertouTarefaMaisPrioritaria);
-  portYIELD_FROM_ISR(despertouTarefaMaisPrioritaria);
-}
 
 }  // namespace
 
 void init() {
-  filaEventosBrutos = xQueueCreate(EVENT_QUEUE_LEN, sizeof(RawEdgeEvent));
-
   for (uint8_t i = 0; i < NUM_CHANNELS; i++) {
     // Pull interno (ver CHANNEL_PULLUP em MAIN.HPP): estabiliza o nível
     // ocioso quando não há sensor conectado a este canal, em vez de
@@ -76,23 +32,35 @@ void init() {
     pinMode(CHANNEL_PINS[i], CHANNEL_PULLUP ? INPUT_PULLUP : INPUT_PULLDOWN);
     niveisAtuais[i] = (digitalRead(CHANNEL_PINS[i]) == HIGH);
     contadoresMudancas[i] = 0;
-    ultimoEventoAceitoUs[i] = 0;
-    attachInterruptArg(CHANNEL_PINS[i], isrCanal,
-                        reinterpret_cast<void*>(static_cast<uintptr_t>(i)), CHANGE);
   }
 }
 
+// Leitura por polling (digitalRead() comparado ao nível anterior), em vez
+// de interrupção CHANGE + fila + debounce por tempo — mesmo modelo do
+// firmware de referência (cronometroV7.ino), que na prática respondeu
+// melhor a eventos rápidos sem registrar transições duplas por ruído. Uma
+// interrupção CHANGE dispara para QUALQUER borda elétrica, inclusive
+// ringing/ruído de nanossegundos que um polling periódico simplesmente
+// nunca chega a amostrar; um debounce por tempo tentava compensar isso na
+// ISR, mas cortar essa janela também arriscava engolir a borda de retorno
+// de um evento real rápido — a troca de arquitetura evita esse dilema por
+// completo. Chamada a cada iteração da tarefa do núcleo 0 (main.cpp), sem
+// delay artificial além do vTaskDelay(1) mínimo entre iterações.
 void processarFilaEventos() {
-  if (filaEventosBrutos == nullptr) return;
+  for (uint8_t i = 0; i < NUM_CHANNELS; i++) {
+    const bool estadoAnterior = niveisAtuais[i];
+    const bool estadoNovo = digitalRead(CHANNEL_PINS[i]) == HIGH;
+    if (estadoNovo == estadoAnterior) continue;
 
-  RawEdgeEvent evento;
-  while (xQueueReceive(filaEventosBrutos, &evento, 0) == pdTRUE) {
-    const uint8_t canal1based = evento.canal0based + 1;
+    const int64_t tempoUs = esp_timer_get_time();
+    niveisAtuais[i] = estadoNovo;
+    contadoresMudancas[i]++;
+
+    const uint8_t canal1based = i + 1;
     const canais::EdgeMode modo = canais::obterModo(canal1based);
-
-    if (canais::isTransitionEnabled(modo, evento.estadoAnterior, evento.estadoNovo)) {
+    if (canais::isTransitionEnabled(modo, estadoAnterior, estadoNovo)) {
       if (callbackEventoValido != nullptr) {
-        callbackEventoValido(canal1based, evento.estadoNovo, evento.tempoUs);
+        callbackEventoValido(canal1based, estadoNovo, tempoUs);
       }
     }
   }

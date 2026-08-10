@@ -92,16 +92,12 @@ constexpr uint8_t BUZZER_PIN = 13;
 // ---------------------------------------------------------------------
 // Filas, buffers e limites configuraveis
 // ---------------------------------------------------------------------
-// Tamanho da fila de eventos brutos de borda (ISR -> tarefa de aquisicao).
-constexpr uint16_t EVENT_QUEUE_LEN = 64;
 // Tamanho da fila de linhas CSV prontas (aquisicao -> tarefa de armazenamento).
 constexpr uint16_t CSV_LINE_QUEUE_LEN = 64;
 // Quantidade de linhas acumuladas no buffer antes de um flush no microSD.
 constexpr uint16_t STORAGE_FLUSH_THRESHOLD = 16;
 // Quantidade maxima de repeticoes permitida em um experimento livre.
 constexpr uint16_t MAX_REPETICOES = 100;
-// Filtro de debounce dos sensores digitais, em microssegundos.
-constexpr uint32_t SENSOR_DEBOUNCE_US = 1000;
 
 // ---------------------------------------------------------------------
 // Diagnóstico de boot/display (temporário — ajuda a confirmar que o

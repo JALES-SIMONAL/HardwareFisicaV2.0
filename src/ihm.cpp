@@ -799,7 +799,7 @@ void desenharGrafico(const char* titulo, const float* temposS, const float* valo
 
   Serial.println("[IHM] Limpando tela em desenharGrafico()");
   display->fillScreen(COR_FUNDO);
-  desenharCabecalhoRodape(titulo, "Gire: outro grafico");
+  desenharCabecalhoRodape(titulo, "KEY: voltar");
 
   const uint8_t fonte = layout::uiFontSize(1);
 

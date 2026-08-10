@@ -51,8 +51,7 @@ enum class Tela : uint8_t {
   AnaliseDistancia,
   AnaliseResultado,
 
-  AnaliseCircularRaio,
-  AnaliseCircularVaos,
+  AnaliseCircularRaioVaos,
   AnaliseCircularResultado,
   AnaliseCircularGrafico
 };

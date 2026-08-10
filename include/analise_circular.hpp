@@ -33,4 +33,18 @@ uint8_t quantidadeAceleracoes();
 const float* temposAceleracaoS();
 const float* aceleracoesMs2();
 
+// Rotação em RPM de cada intervalo entre eventos consecutivos — não depende
+// do raio, só de vãos e do tempo do intervalo: (1/vãos) volta em deltaT
+// segundos, convertido para voltas por minuto. Mesmos instantes de
+// temposVelocidadeS() (um ponto de RPM por ponto de velocidade).
+uint8_t quantidadeRpm();
+const float* temposRpmS();
+const float* rpmValores();
+
+// Média aritmética simples de velocidadesMs()/aceleracoesMs2()/rpmValores()
+// (mesmos valores plotados nos gráficos) — 0 quando não há pontos.
+float velocidadeMediaMs();
+float aceleracaoMediaMs2();
+float rpmMedia();
+
 }  // namespace analise_circular

@@ -503,8 +503,7 @@ const char* nomeTela(Tela tela) {
     case Tela::AnaliseEventos: return "Eventos";
     case Tela::AnaliseDistancia: return "Distancia";
     case Tela::AnaliseResultado: return "Resultado";
-    case Tela::AnaliseCircularRaio: return "Raio";
-    case Tela::AnaliseCircularVaos: return "Vaos";
+    case Tela::AnaliseCircularRaioVaos: return "Raio e vaos";
     case Tela::AnaliseCircularResultado: return "Resultado circular";
     case Tela::AnaliseCircularGrafico: return "Grafico";
     default: return "Tela";
@@ -973,21 +972,36 @@ void tratarAnaliseSelecionarArquivo(const Command& cmd) {
 // Escolha do tipo de análise para a repetição já carregada: 0 = análise
 // linear (fluxo existente: dois eventos + distância -> velocidade), 1 =
 // movimento circular (raio + vãos -> distância + gráficos de
-// velocidade/aceleração).
+// velocidade/aceleração), 2 = voltar. Sem o item "Voltar" (e sem tratar
+// CommandType::Back) esta tela era um beco sem saída no encoder local: ele
+// só gera Next/Previous/Confirm (ver tick()), nunca Back — Back só existe
+// vindo do app Bluetooth.
+constexpr uint8_t QTD_ANALISE_TIPO = 3;
+constexpr uint8_t ITEM_ANALISE_TIPO_VOLTAR = 2;
+
 void tratarAnaliseTipo(const Command& cmd) {
   switch (cmd.tipo) {
     case CommandType::Next:
+      estado.indiceSelecionado = (estado.indiceSelecionado + 1) % QTD_ANALISE_TIPO;
+      precisaRedesenhar = true;
+      break;
     case CommandType::Previous:
-      estado.indiceSelecionado = (estado.indiceSelecionado == 0) ? 1 : 0;
+      estado.indiceSelecionado =
+          (estado.indiceSelecionado == 0) ? (QTD_ANALISE_TIPO - 1) : (estado.indiceSelecionado - 1);
       precisaRedesenhar = true;
       break;
     case CommandType::Confirm:
       if (estado.indiceSelecionado == 0) {
         indiceEventoInicialAnalise = -1;
         navegarPara(Tela::AnaliseEventos);
-      } else {
-        navegarPara(Tela::AnaliseCircularRaio);
+      } else if (estado.indiceSelecionado == 1) {
+        navegarPara(Tela::AnaliseCircularRaioVaos);
+      } else if (estado.indiceSelecionado == ITEM_ANALISE_TIPO_VOLTAR) {
+        voltarUmNivel();
       }
+      break;
+    case CommandType::Back:
+      voltarUmNivel();
       break;
     default:
       break;
@@ -999,25 +1013,82 @@ constexpr int32_t ANALISE_CIRCULAR_RAIO_MAX_MM = 500;
 constexpr int32_t ANALISE_CIRCULAR_VAOS_MIN = 1;
 constexpr int32_t ANALISE_CIRCULAR_VAOS_MAX = 200;
 
-void tratarAnaliseCircularRaio(const Command& cmd) {
-  // Seletor "Raio: N mm / Voltar" — mesmo padrão de tratarAnaliseDistancia.
+// Raio e vãos numa página só (ver redesenharAnaliseCircularRaioVaos()): uma
+// lista de 4 itens ("Raio: N mm", "Vaos: N", "Calcular", "Voltar"); Confirm
+// nos dois primeiros entra em edição do respectivo valor (mesma mecânica de
+// tratarSeletorValorComVoltar, só que com dois valores em vez de um — por
+// isso não reaproveita aquele helper). "Calcular" roda a análise com os
+// valores atuais e vai para o resultado; "Voltar" sai para AnaliseTipo.
+constexpr uint8_t QTD_CIRCULAR_RAIO_VAOS = 4;
+constexpr uint8_t ITEM_CIRCULAR_RAIO = 0;
+constexpr uint8_t ITEM_CIRCULAR_VAOS = 1;
+constexpr uint8_t ITEM_CIRCULAR_CALCULAR = 2;
+constexpr uint8_t ITEM_CIRCULAR_VOLTAR = 3;
+
+void tratarAnaliseCircularRaioVaos(const Command& cmd) {
   if (!edicaoValor.emEdicao) {
-    tratarSeletorValorComVoltar(cmd, analiseCircularRaioMm);
+    switch (cmd.tipo) {
+      case CommandType::Next:
+        estado.indiceSelecionado = (estado.indiceSelecionado + 1) % QTD_CIRCULAR_RAIO_VAOS;
+        precisaRedesenhar = true;
+        break;
+      case CommandType::Previous:
+        estado.indiceSelecionado = (estado.indiceSelecionado == 0)
+                                        ? (QTD_CIRCULAR_RAIO_VAOS - 1)
+                                        : (estado.indiceSelecionado - 1);
+        precisaRedesenhar = true;
+        break;
+      case CommandType::Confirm:
+        if (estado.indiceSelecionado == ITEM_CIRCULAR_RAIO) {
+          edicaoValor.emEdicao = true;
+          edicaoValor.valorTemp = analiseCircularRaioMm;
+          precisaRedesenhar = true;
+        } else if (estado.indiceSelecionado == ITEM_CIRCULAR_VAOS) {
+          edicaoValor.emEdicao = true;
+          edicaoValor.valorTemp = analiseCircularVaosQtd;
+          precisaRedesenhar = true;
+        } else if (estado.indiceSelecionado == ITEM_CIRCULAR_CALCULAR) {
+          const float raioMetros = static_cast<float>(analiseCircularRaioMm) / 1000.0f;
+          analise_circular::calcular(raioMetros, static_cast<uint16_t>(analiseCircularVaosQtd));
+          analiseCircularPaginaGrafico = 0;
+          navegarPara(Tela::AnaliseCircularResultado);
+        } else if (estado.indiceSelecionado == ITEM_CIRCULAR_VOLTAR) {
+          voltarUmNivel();
+        }
+        break;
+      case CommandType::Back:
+        voltarUmNivel();
+        break;
+      default:
+        break;
+    }
     return;
   }
 
+  // Editando o campo selecionado (Raio ou Vaos) — Confirm salva no campo
+  // certo e volta para a lista (sem avançar de tela: dá pra editar o outro
+  // campo em seguida); Back cancela a edição sem salvar.
+  const bool editandoRaio = (estado.indiceSelecionado == ITEM_CIRCULAR_RAIO);
+  const int32_t minimo = editandoRaio ? ANALISE_CIRCULAR_RAIO_MIN_MM : ANALISE_CIRCULAR_VAOS_MIN;
+  const int32_t maximo = editandoRaio ? ANALISE_CIRCULAR_RAIO_MAX_MM : ANALISE_CIRCULAR_VAOS_MAX;
+
   switch (cmd.tipo) {
     case CommandType::Next:
-      if (edicaoValor.valorTemp < ANALISE_CIRCULAR_RAIO_MAX_MM) edicaoValor.valorTemp++;
+      if (edicaoValor.valorTemp < maximo) edicaoValor.valorTemp++;
       precisaRedesenhar = true;
       break;
     case CommandType::Previous:
-      if (edicaoValor.valorTemp > ANALISE_CIRCULAR_RAIO_MIN_MM) edicaoValor.valorTemp--;
+      if (edicaoValor.valorTemp > minimo) edicaoValor.valorTemp--;
       precisaRedesenhar = true;
       break;
     case CommandType::Confirm:
-      analiseCircularRaioMm = edicaoValor.valorTemp;
-      navegarPara(Tela::AnaliseCircularVaos);
+      if (editandoRaio) {
+        analiseCircularRaioMm = edicaoValor.valorTemp;
+      } else {
+        analiseCircularVaosQtd = edicaoValor.valorTemp;
+      }
+      edicaoValor.emEdicao = false;
+      precisaRedesenhar = true;
       break;
     case CommandType::Back:
       edicaoValor.emEdicao = false;
@@ -1028,43 +1099,48 @@ void tratarAnaliseCircularRaio(const Command& cmd) {
   }
 }
 
-void tratarAnaliseCircularVaos(const Command& cmd) {
-  if (!edicaoValor.emEdicao) {
-    tratarSeletorValorComVoltar(cmd, analiseCircularVaosQtd);
-    return;
-  }
+// Itens da lista da tela de resultado (ver redesenharAnaliseCircularResultado()):
+// os cinco primeiros (distancia, pontos, vel. media, acel. media, rpm
+// medio) são só informativos — Confirm neles não faz nada, mesmo padrão de
+// tratarArquivoDados()/tratarConfigCanaisVisualizar(); os três gráficos são
+// opções separadas (não uma única tela alternada por rotação) e "Voltar"
+// fecha a análise.
+constexpr uint8_t QTD_ANALISE_CIRCULAR_RESULTADO = 9;
+constexpr uint8_t ITEM_CIRCULAR_RESULTADO_GRAFICO_VELOCIDADE = 5;
+constexpr uint8_t ITEM_CIRCULAR_RESULTADO_GRAFICO_ACELERACAO = 6;
+constexpr uint8_t ITEM_CIRCULAR_RESULTADO_GRAFICO_RPM = 7;
+constexpr uint8_t ITEM_CIRCULAR_RESULTADO_VOLTAR = 8;
 
-  switch (cmd.tipo) {
-    case CommandType::Next:
-      if (edicaoValor.valorTemp < ANALISE_CIRCULAR_VAOS_MAX) edicaoValor.valorTemp++;
-      precisaRedesenhar = true;
-      break;
-    case CommandType::Previous:
-      if (edicaoValor.valorTemp > ANALISE_CIRCULAR_VAOS_MIN) edicaoValor.valorTemp--;
-      precisaRedesenhar = true;
-      break;
-    case CommandType::Confirm: {
-      analiseCircularVaosQtd = edicaoValor.valorTemp;
-      const float raioMetros = static_cast<float>(analiseCircularRaioMm) / 1000.0f;
-      analise_circular::calcular(raioMetros, static_cast<uint16_t>(analiseCircularVaosQtd));
-      analiseCircularPaginaGrafico = 0;
-      navegarPara(Tela::AnaliseCircularResultado);
-      break;
-    }
-    case CommandType::Back:
-      edicaoValor.emEdicao = false;
-      precisaRedesenhar = true;
-      break;
-    default:
-      break;
-  }
-}
+// Páginas de ihm::desenharGrafico() na tela Tela::AnaliseCircularGrafico.
+constexpr uint8_t PAGINA_GRAFICO_VELOCIDADE = 0;
+constexpr uint8_t PAGINA_GRAFICO_ACELERACAO = 1;
+constexpr uint8_t PAGINA_GRAFICO_RPM = 2;
 
 void tratarAnaliseCircularResultado(const Command& cmd) {
   switch (cmd.tipo) {
+    case CommandType::Next:
+      estado.indiceSelecionado = (estado.indiceSelecionado + 1) % QTD_ANALISE_CIRCULAR_RESULTADO;
+      precisaRedesenhar = true;
+      break;
+    case CommandType::Previous:
+      estado.indiceSelecionado = (estado.indiceSelecionado == 0)
+                                      ? (QTD_ANALISE_CIRCULAR_RESULTADO - 1)
+                                      : (estado.indiceSelecionado - 1);
+      precisaRedesenhar = true;
+      break;
     case CommandType::Confirm:
-      analiseCircularPaginaGrafico = 0;
-      navegarPara(Tela::AnaliseCircularGrafico);
+      if (estado.indiceSelecionado == ITEM_CIRCULAR_RESULTADO_GRAFICO_VELOCIDADE) {
+        analiseCircularPaginaGrafico = PAGINA_GRAFICO_VELOCIDADE;
+        navegarPara(Tela::AnaliseCircularGrafico);
+      } else if (estado.indiceSelecionado == ITEM_CIRCULAR_RESULTADO_GRAFICO_ACELERACAO) {
+        analiseCircularPaginaGrafico = PAGINA_GRAFICO_ACELERACAO;
+        navegarPara(Tela::AnaliseCircularGrafico);
+      } else if (estado.indiceSelecionado == ITEM_CIRCULAR_RESULTADO_GRAFICO_RPM) {
+        analiseCircularPaginaGrafico = PAGINA_GRAFICO_RPM;
+        navegarPara(Tela::AnaliseCircularGrafico);
+      } else if (estado.indiceSelecionado == ITEM_CIRCULAR_RESULTADO_VOLTAR) {
+        voltarUmNivel();
+      }
       break;
     case CommandType::Back:
       voltarUmNivel();
@@ -1076,11 +1152,6 @@ void tratarAnaliseCircularResultado(const Command& cmd) {
 
 void tratarAnaliseCircularGrafico(const Command& cmd) {
   switch (cmd.tipo) {
-    case CommandType::Next:
-    case CommandType::Previous:
-      analiseCircularPaginaGrafico = (analiseCircularPaginaGrafico == 0) ? 1 : 0;
-      precisaRedesenhar = true;
-      break;
     case CommandType::Confirm:
     case CommandType::Back:
       voltarUmNivel();
@@ -1837,28 +1908,68 @@ void redesenharAnaliseResultado() {
 }
 
 void redesenharAnaliseTipo() {
-  static const char* const itens[2] = {"Analise linear", "Mov. circular"};
-  uint8_t offsetFixo = 0;
-  ihm::desenharListaMenu("Tipo de analise", itens, 2, estado.indiceSelecionado, offsetFixo);
+  static const char* const itens[QTD_ANALISE_TIPO] = {"Analise linear", "Mov. circular", "Voltar"};
+  ihm::desenharListaMenu("Tipo de analise", itens, QTD_ANALISE_TIPO, estado.indiceSelecionado,
+                          estado.offsetRolagem);
+}
+
+void redesenharAnaliseCircularRaioVaos() {
+  if (edicaoValor.emEdicao) {
+    if (estado.indiceSelecionado == ITEM_CIRCULAR_RAIO) {
+      ihm::desenharValorEditavel("Raio", edicaoValor.valorTemp, ANALISE_CIRCULAR_RAIO_MIN_MM,
+                                  ANALISE_CIRCULAR_RAIO_MAX_MM, "mm");
+    } else {
+      ihm::desenharValorEditavel("Vaos", edicaoValor.valorTemp, ANALISE_CIRCULAR_VAOS_MIN,
+                                  ANALISE_CIRCULAR_VAOS_MAX);
+    }
+    return;
+  }
+
+  char itemRaio[24];
+  char itemVaos[24];
+  snprintf(itemRaio, sizeof(itemRaio), "Raio: %ldmm", static_cast<long>(analiseCircularRaioMm));
+  snprintf(itemVaos, sizeof(itemVaos), "Vaos: %ld", static_cast<long>(analiseCircularVaosQtd));
+  const char* itens[QTD_CIRCULAR_RAIO_VAOS] = {itemRaio, itemVaos, "Calcular", "Voltar"};
+
+  ihm::desenharListaMenu("Raio e vaos", itens, QTD_CIRCULAR_RAIO_VAOS, estado.indiceSelecionado,
+                          estado.offsetRolagem);
 }
 
 void redesenharAnaliseCircularResultado() {
-  char linha1[32];
-  char linha2[32];
-  snprintf(linha1, sizeof(linha1), "Distancia: %.3fm",
+  char itemDistancia[32];
+  char itemPontos[32];
+  char itemVelocidade[32];
+  char itemAceleracao[32];
+  char itemRpm[32];
+  snprintf(itemDistancia, sizeof(itemDistancia), "Distancia: %.3fm",
            static_cast<double>(analise_circular::distanciaTotalMetros()));
-  snprintf(linha2, sizeof(linha2), "Pontos: %u", static_cast<unsigned>(analise_circular::quantidadeVelocidades()));
-  const char* linhas[3] = {linha1, linha2, "KEY: ver graficos"};
-  ihm::desenharListaRolavel("Resultado", linhas, 3, 0);
+  snprintf(itemPontos, sizeof(itemPontos), "Pontos: %u",
+           static_cast<unsigned>(analise_circular::quantidadeVelocidades()));
+  snprintf(itemVelocidade, sizeof(itemVelocidade), "Vel. media: %.2fm/s",
+           static_cast<double>(analise_circular::velocidadeMediaMs()));
+  snprintf(itemAceleracao, sizeof(itemAceleracao), "Acel. media: %.2fm/s2",
+           static_cast<double>(analise_circular::aceleracaoMediaMs2()));
+  snprintf(itemRpm, sizeof(itemRpm), "RPM medio: %.1f",
+           static_cast<double>(analise_circular::rpmMedia()));
+
+  const char* itens[QTD_ANALISE_CIRCULAR_RESULTADO] = {
+      itemDistancia, itemPontos, itemVelocidade, itemAceleracao, itemRpm,
+      "Ver grafico veloc.", "Ver grafico acel.", "Ver grafico rpm", "Voltar"};
+
+  ihm::desenharListaMenu("Resultado", itens, QTD_ANALISE_CIRCULAR_RESULTADO, estado.indiceSelecionado,
+                          estado.offsetRolagem);
 }
 
 void redesenharAnaliseCircularGrafico() {
-  if (analiseCircularPaginaGrafico == 0) {
+  if (analiseCircularPaginaGrafico == PAGINA_GRAFICO_VELOCIDADE) {
     ihm::desenharGrafico("Velocidade (m/s)", analise_circular::temposVelocidadeS(),
                           analise_circular::velocidadesMs(), analise_circular::quantidadeVelocidades());
-  } else {
+  } else if (analiseCircularPaginaGrafico == PAGINA_GRAFICO_ACELERACAO) {
     ihm::desenharGrafico("Aceleracao (m/s2)", analise_circular::temposAceleracaoS(),
                           analise_circular::aceleracoesMs2(), analise_circular::quantidadeAceleracoes());
+  } else {
+    ihm::desenharGrafico("RPM", analise_circular::temposRpmS(), analise_circular::rpmValores(),
+                          analise_circular::quantidadeRpm());
   }
 }
 
@@ -2042,13 +2153,8 @@ void redesenharTelaAtual() {
     case Tela::AnaliseResultado:
       redesenharAnaliseResultado();
       break;
-    case Tela::AnaliseCircularRaio:
-      redesenharValorComVoltar("Raio", analiseCircularRaioMm, ANALISE_CIRCULAR_RAIO_MIN_MM,
-                                ANALISE_CIRCULAR_RAIO_MAX_MM, "mm");
-      break;
-    case Tela::AnaliseCircularVaos:
-      redesenharValorComVoltar("Vaos", analiseCircularVaosQtd, ANALISE_CIRCULAR_VAOS_MIN,
-                                ANALISE_CIRCULAR_VAOS_MAX);
+    case Tela::AnaliseCircularRaioVaos:
+      redesenharAnaliseCircularRaioVaos();
       break;
     case Tela::AnaliseCircularResultado:
       redesenharAnaliseCircularResultado();
@@ -2406,11 +2512,8 @@ void processarComando(const Command& cmd, Origem /*origem*/) {
     case Tela::AnaliseDistancia:
       tratarAnaliseDistancia(cmd);
       break;
-    case Tela::AnaliseCircularRaio:
-      tratarAnaliseCircularRaio(cmd);
-      break;
-    case Tela::AnaliseCircularVaos:
-      tratarAnaliseCircularVaos(cmd);
+    case Tela::AnaliseCircularRaioVaos:
+      tratarAnaliseCircularRaioVaos(cmd);
       break;
     case Tela::AnaliseCircularResultado:
       tratarAnaliseCircularResultado(cmd);

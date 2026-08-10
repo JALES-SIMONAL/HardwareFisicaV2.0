@@ -301,20 +301,24 @@ uint32_t proximoNumeroMedicao() {
 }
 
 // Nome sugerido ao entrar na tela de nomear uma medicao recem-finalizada:
-// "T" + data/hora (DDMMAAAA_HHMM) se o app ja informou o horario atual
-// nesta conexao, ou "MEDICAO" + numero crescente caso contrario. O usuario
-// pode aceitar (Confirmar direto) ou apagar/editar antes de confirmar.
+// data/hora (DD-MM-AAAA_HH-MM, ex.: "10-08-2026_14-30") se o app ja
+// informou o horario atual nesta conexao, ou "MEDICAO" + numero crescente
+// caso contrario. 16 caracteres no total — dentro do limite de
+// TAMANHO_MAX_NOME_ARQUIVO (20). O usuario pode aceitar (Confirmar direto)
+// ou apagar/editar antes de confirmar; "/" e ":" não entram no nome porque
+// não são permitidos em arquivos no cartão SD (FAT reserva "/" como
+// separador de pasta e ":" como separador de unidade).
 void gerarNomeSugerido(char* saida, size_t tamanho) {
   if (tempo::horarioConhecido()) {
-    char dataHora[16];
-    tempo::formatarDataHoraAtual(dataHora, sizeof(dataHora));
-    snprintf(saida, tamanho, "T%s", dataHora);
+    tempo::formatarDataHoraAtual(saida, tamanho);
   } else {
     snprintf(saida, tamanho, "MEDICAO%lu", static_cast<unsigned long>(proximoNumeroMedicao()));
   }
 }
 
-char arquivoSelecionadoNome[16] = "";
+// +5 = ".csv" + '\0' — precisa caber o nome inteiro devolvido por
+// armazenamento::listarArquivos() (ver comentário em InfoArquivo::nome).
+char arquivoSelecionadoNome[TAMANHO_MAX_NOME_ARQUIVO + 5] = "";
 
 constexpr uint16_t MAX_ARQUIVOS_LISTA = 20;
 armazenamento::InfoArquivo arquivosListados[MAX_ARQUIVOS_LISTA];
@@ -360,7 +364,7 @@ void carregarDadosArquivo(const char* nomeComExtensao) {
   armazenamento::fecharLeitura();
 }
 
-char arquivoAnaliseNome[16] = "";
+char arquivoAnaliseNome[TAMANHO_MAX_NOME_ARQUIVO + 5] = "";
 int16_t indiceEventoInicialAnalise = -1;
 int64_t deltaTAnaliseUs = 0;
 float velocidadeAnaliseMs = 0.0f;
@@ -508,6 +512,7 @@ const char* nomeTela(Tela tela) {
     case Tela::ArquivoDetalhe: return "Detalhe do arquivo";
     case Tela::ArquivoRenomear: return "Renomear";
     case Tela::ArquivoExcluirConfirmar: return "Excluir?";
+    case Tela::ArquivosExcluirTodosConfirmar: return "Excluir todos?";
     case Tela::ArquivoDados: return "Ver dados";
     case Tela::ConexaoApp: return "Conexao com app";
     case Tela::ConexaoAppRenomear: return "Renomear dispositivo BT";
@@ -808,7 +813,10 @@ void tratarGerenciamentoArquivos(const Command& cmd) {
     return;
   }
 
-  const uint16_t qtd = quantidadeArquivosListados + 1;  // +1 = "Voltar"
+  // +1 = "Excluir todos", +1 = "Voltar".
+  const uint16_t itemExcluirTodos = quantidadeArquivosListados;
+  const uint16_t itemVoltar = quantidadeArquivosListados + 1;
+  const uint16_t qtd = quantidadeArquivosListados + 2;
   switch (cmd.tipo) {
     case CommandType::Next:
       estado.indiceSelecionado = (estado.indiceSelecionado + 1) % qtd;
@@ -819,7 +827,9 @@ void tratarGerenciamentoArquivos(const Command& cmd) {
       precisaRedesenhar = true;
       break;
     case CommandType::Confirm:
-      if (estado.indiceSelecionado == quantidadeArquivosListados) {
+      if (estado.indiceSelecionado == itemExcluirTodos) {
+        navegarPara(Tela::ArquivosExcluirTodosConfirmar);
+      } else if (estado.indiceSelecionado == itemVoltar) {
         voltarUmNivel();
       } else {
         std::strncpy(arquivoSelecionadoNome, arquivosListados[estado.indiceSelecionado].nome,
@@ -881,6 +891,29 @@ void confirmarExcluirArquivoNao() { voltarUmNivel(); }
 
 void tratarArquivoExcluirConfirmar(const Command& cmd) {
   tratarConfirmacaoBinaria(cmd, confirmarExcluirArquivoSim, confirmarExcluirArquivoNao);
+}
+
+void confirmarExcluirTodosArquivosSim() {
+  // Só ".csv" (coletas) — as imagens de boot (Monkey Tech.bmp/UFRN.bmp) já
+  // nem aparecem em arquivosListados (armazenamento::listarArquivos as
+  // filtra), mas a checagem de extensão fica aqui como segunda garantia
+  // caso outro tipo de arquivo apareça no cartão no futuro.
+  uint16_t excluidos = 0;
+  for (uint16_t i = 0; i < quantidadeArquivosListados; i++) {
+    const char* nome = arquivosListados[i].nome;
+    const size_t comprimento = std::strlen(nome);
+    if (comprimento > 4 && std::strcmp(nome + comprimento - 4, ".csv") == 0) {
+      if (armazenamento::excluirArquivo(nome)) excluidos++;
+    }
+  }
+  Serial.printf("[ARQUIVOS] Excluir todos: %u csv(s) removido(s)\n", static_cast<unsigned>(excluidos));
+  bluetooth_app::publicarListaArquivos();
+  navegarPara(Tela::GerenciamentoArquivos);
+}
+void confirmarExcluirTodosArquivosNao() { voltarUmNivel(); }
+
+void tratarArquivosExcluirTodosConfirmar(const Command& cmd) {
+  tratarConfirmacaoBinaria(cmd, confirmarExcluirTodosArquivosSim, confirmarExcluirTodosArquivosNao);
 }
 
 // Só leitura/rolagem — "Voltar" é o único item que faz algo ao confirmar,
@@ -1873,16 +1906,17 @@ void redesenharGerenciamentoArquivos() {
   }
 
   char buffers[MAX_ARQUIVOS_LISTA][24];
-  const char* itens[MAX_ARQUIVOS_LISTA + 1];
+  const char* itens[MAX_ARQUIVOS_LISTA + 2];
   for (uint16_t i = 0; i < quantidadeArquivosListados; i++) {
     snprintf(buffers[i], sizeof(buffers[i]), "%s (%lu B)", arquivosListados[i].nome,
              static_cast<unsigned long>(arquivosListados[i].tamanhoBytes));
     itens[i] = buffers[i];
   }
-  itens[quantidadeArquivosListados] = "Voltar";
+  itens[quantidadeArquivosListados] = "Excluir todos";
+  itens[quantidadeArquivosListados + 1] = "Voltar";
 
-  ihm::desenharListaMenu("Arquivos", itens, quantidadeArquivosListados + 1, estado.indiceSelecionado,
-                          estado.offsetRolagem);
+  ihm::desenharListaMenu("Arquivos", itens, static_cast<uint8_t>(quantidadeArquivosListados + 2),
+                          estado.indiceSelecionado, estado.offsetRolagem);
 }
 
 void redesenharArquivoDados() {
@@ -2221,6 +2255,9 @@ void redesenharTelaAtual() {
       ihm::desenharConfirmacao(pergunta, estado.indiceSelecionado);
       break;
     }
+    case Tela::ArquivosExcluirTodosConfirmar:
+      ihm::desenharConfirmacao("Excluir todos os CSVs?", estado.indiceSelecionado);
+      break;
     case Tela::ArquivoDados:
       redesenharArquivoDados();
       break;
@@ -2475,6 +2512,10 @@ void processarComando(const Command& cmd, Origem /*origem*/) {
       bluetooth_app::publicarListaArquivos();
       return;
     case CommandType::RenameFile: {
+      // Mesmo limite da edição local (TAMANHO_MAX_NOME_ARQUIVO): sem isto,
+      // um nome maior vindo do app seria truncado em silêncio pelo
+      // snprintf abaixo em vez de ser recusado.
+      if (std::strlen(cmd.texto2) > TAMANHO_MAX_NOME_ARQUIVO) return;
       char nomeComExtensao[TAMANHO_MAX_NOME_ARQUIVO + 5];
       snprintf(nomeComExtensao, sizeof(nomeComExtensao), "%s.csv", cmd.texto2);
       armazenamento::renomearArquivo(cmd.texto, nomeComExtensao);
@@ -2585,6 +2626,9 @@ void processarComando(const Command& cmd, Origem /*origem*/) {
       break;
     case Tela::ArquivoExcluirConfirmar:
       tratarArquivoExcluirConfirmar(cmd);
+      break;
+    case Tela::ArquivosExcluirTodosConfirmar:
+      tratarArquivosExcluirTodosConfirmar(cmd);
       break;
     case Tela::ArquivoDados:
       tratarArquivoDados(cmd);

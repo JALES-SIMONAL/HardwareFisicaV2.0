@@ -371,6 +371,14 @@ uint16_t listarArquivos(InfoArquivo* destino, uint16_t capacidadeDestino) {
 bool renomearArquivo(const char* nomeAtual, const char* novoNome) {
   if (!cartaoOk) return false;
 
+  // Nome novo igual ao atual (ex.: usuário abriu "Renomear" e confirmou
+  // sem editar nada): nada a fazer. Sem isto, o SD.exists(para) logo
+  // abaixo sempre achava o PRÓPRIO arquivo e retornava false (\"já
+  // existe\"), fazendo o chamador (finalizarEdicaoNomeArquivo(), em
+  // maquina_estados.cpp) só apitar e deixar o usuário preso na tela de
+  // edição, sem navegar para lugar nenhum nem explicar o motivo.
+  if (nomesIguaisSemCase(nomeAtual, novoNome)) return true;
+
   TravaBarramentoSD travaBus;
   char de[32];
   char para[32];

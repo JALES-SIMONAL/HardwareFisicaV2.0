@@ -20,7 +20,7 @@ void definirEpoch(uint32_t epochSegundos);
 // true a partir da primeira definirEpoch() bem-sucedida neste boot.
 bool horarioConhecido();
 
-// Formata o instante atual como "DDMMAAAA_HHMM" (13 caracteres + '\0').
+// Formata o instante atual como "DD-MM-AAAA_HH-MM" (16 caracteres + '\0').
 // Só deve ser chamado se horarioConhecido() for true; caso contrário,
 // escreve uma string vazia.
 void formatarDataHoraAtual(char* saida, size_t tamanhoSaida);

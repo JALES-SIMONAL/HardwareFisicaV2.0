@@ -41,6 +41,7 @@ enum class Tela : uint8_t {
   ArquivoDetalhe,
   ArquivoRenomear,
   ArquivoExcluirConfirmar,
+  ArquivosExcluirTodosConfirmar,
   ArquivoDados,
   ConexaoApp,
   ConexaoAppRenomear,

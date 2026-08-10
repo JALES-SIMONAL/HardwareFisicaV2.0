@@ -34,7 +34,15 @@ void processarFila();
 void fecharArquivoAtual();
 
 struct InfoArquivo {
-  char nome[16];
+  // 25 = 20 (TAMANHO_MAX_NOME_ARQUIVO, o maior nome digitável no editor de
+  // texto da IHM, em maquina_estados.cpp) + 4 (".csv") + 1 ('\0'). Com 16
+  // bytes (tamanho antigo), nomes gerados automaticamente com data/hora
+  // (ex.: "T10082026_1430.csv", 18 caracteres) ficavam truncados bem no
+  // meio da extensão — o nome guardado virava "T10082026_1430." (sem
+  // "csv"), e toda operação subsequente com esse arquivo (abrir/excluir)
+  // falhava por procurar um nome que não existe no cartão, mesmo o arquivo
+  // de verdade existindo e tendo dados válidos.
+  char nome[25];
   uint32_t tamanhoBytes;
 };
 

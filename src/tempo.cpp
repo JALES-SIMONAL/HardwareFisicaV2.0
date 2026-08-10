@@ -34,7 +34,7 @@ void formatarDataHoraAtual(char* saida, size_t tamanhoSaida) {
   struct tm horario;
   gmtime_r(&agora, &horario);
 
-  snprintf(saida, tamanhoSaida, "%02d%02d%04d_%02d%02d", horario.tm_mday, horario.tm_mon + 1,
+  snprintf(saida, tamanhoSaida, "%02d-%02d-%04d_%02d-%02d", horario.tm_mday, horario.tm_mon + 1,
             horario.tm_year + 1900, horario.tm_hour, horario.tm_min);
 }
 

@@ -54,8 +54,10 @@ struct Command {
   int32_t valor = 0;        // deltas de encoder, brilho/volume, repetições...
   uint8_t canal = 0;        // índice do canal (1..NUM_CHANNELS) quando aplicável
   EdgeMode modo = EdgeMode::Both;
-  char texto[24] = "";      // nome de arquivo/valor textual quando aplicável
-  char texto2[24] = "";     // segundo texto (só RenameFile: nome novo)
+  // 25 = maior nome de arquivo possível (20 digitáveis no editor da IHM +
+  // ".csv" + '\0' — ver comentário em armazenamento::InfoArquivo::nome).
+  char texto[25] = "";       // nome de arquivo/valor textual quando aplicável
+  char texto2[25] = "";      // segundo texto (só RenameFile: nome novo)
 };
 
 }  // namespace comandos

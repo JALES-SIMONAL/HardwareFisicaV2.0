@@ -26,6 +26,18 @@ uint16_t totalRepeticoesNum = 1;
 uint32_t eventosRepeticaoAtual = 0;
 int64_t inicioRepeticaoUs = 0;
 
+// Referência dos timestamps GRAVADOS no CSV (ver aoReceberEventoValido()):
+// o primeiro evento válido de cada repetição sempre grava tempo_us=0, e os
+// demais eventos da mesma repetição ficam relativos a esse primeiro
+// evento — não ao instante em que a repetição começou/foi reiniciada
+// (inicioRepeticaoUs), que pode ter um atraso variável e sem sentido físico
+// até o primeiro movimento de verdade do usuário. inicioRepeticaoUs
+// continua existindo só para o cronômetro AO VIVO da tela de execução
+// (tempoDecorridoUs()), que precisa contar desde o início/reinício de
+// verdade da repetição, evento nenhum ainda recebido ou não.
+int64_t primeiroEventoRepeticaoUs = 0;
+bool primeiroEventoRepeticaoDefinido = false;
+
 // Linhas CSV da repetição ATUAL (ainda não finalizada), acumuladas aqui em
 // vez de irem direto para armazenamento::enfileirarLinha() — só são
 // entregues ao módulo de armazenamento (e, portanto, gravadas no arquivo de
@@ -58,12 +70,18 @@ portMUX_TYPE mux = portMUX_INITIALIZER_UNLOCKED;
 void aoReceberEventoValido(uint8_t canal1based, bool novoEstado, int64_t tempoUs) {
   portENTER_CRITICAL(&mux);
   const bool ativo = (fase == Fase::Executando);
-  const int64_t inicio = inicioRepeticaoUs;
+  if (ativo && !primeiroEventoRepeticaoDefinido) {
+    // Este é o primeiro evento válido da repetição atual: vira a
+    // referência (tempo_us=0 para ele mesmo, ver cálculo abaixo).
+    primeiroEventoRepeticaoUs = tempoUs;
+    primeiroEventoRepeticaoDefinido = true;
+  }
+  const int64_t referencia = primeiroEventoRepeticaoUs;
   portEXIT_CRITICAL(&mux);
 
   if (!ativo) return;
 
-  const int64_t tempoRelativoUs = tempoUs - inicio;
+  const int64_t tempoRelativoUs = tempoUs - referencia;
 
   // Não escreve direto em armazenamento::enfileirarLinha() — a linha fica só
   // no buffer RAM da repetição atual, e só é entregue de fato ao arquivo
@@ -125,6 +143,7 @@ bool iniciar(uint16_t totalRepeticoesSolicitadas) {
   eventosRepeticaoAtual = 0;
   quantidadeLinhasBuffer = 0;
   inicioRepeticaoUs = esp_timer_get_time();
+  primeiroEventoRepeticaoDefinido = false;
   portEXIT_CRITICAL(&mux);
   return true;
 }
@@ -162,6 +181,7 @@ void finalizarRepeticaoAtual() {
   repeticaoAtualNum++;
   eventosRepeticaoAtual = 0;
   inicioRepeticaoUs = esp_timer_get_time();
+  primeiroEventoRepeticaoDefinido = false;
   portEXIT_CRITICAL(&mux);
 }
 
@@ -175,6 +195,7 @@ void reiniciarRepeticaoAtual() {
     quantidadeLinhasBuffer = 0;
     eventosRepeticaoAtual = 0;
     inicioRepeticaoUs = esp_timer_get_time();
+    primeiroEventoRepeticaoDefinido = false;
   }
   portEXIT_CRITICAL(&mux);
 }

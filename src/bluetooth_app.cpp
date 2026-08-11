@@ -220,11 +220,22 @@ void processarLinha(char* linha) {
     std::strncpy(cmd.texto, doc["arquivo"] | "", sizeof(cmd.texto) - 1);
     cmd.valor = doc["offset"] | 0;
   } else if (std::strcmp(acao, "set_device_name") == 0) {
+    // texto2 = senha: trocar o nome anunciado no BLE é uma das duas ações
+    // protegidas por senha (ver configuracoes::validarSenha).
     cmd.tipo = comandos::CommandType::SetDeviceName;
     std::strncpy(cmd.texto, doc["nome"] | "", sizeof(cmd.texto) - 1);
+    std::strncpy(cmd.texto2, doc["senha"] | "", sizeof(cmd.texto2) - 1);
   } else if (std::strcmp(acao, "set_datetime") == 0) {
     cmd.tipo = comandos::CommandType::SetDateTime;
     cmd.valor = doc["epoch"] | 0;
+  } else if (std::strcmp(acao, "set_data_analysis_enabled") == 0) {
+    cmd.tipo = comandos::CommandType::SetDataAnalysisEnabled;
+    cmd.valor = (doc["habilitado"] | false) ? 1 : 0;
+    std::strncpy(cmd.texto, doc["senha"] | "", sizeof(cmd.texto) - 1);
+  } else if (std::strcmp(acao, "set_password") == 0) {
+    cmd.tipo = comandos::CommandType::SetPassword;
+    std::strncpy(cmd.texto, doc["senha_atual"] | "", sizeof(cmd.texto) - 1);
+    std::strncpy(cmd.texto2, doc["nova_senha"] | "", sizeof(cmd.texto2) - 1);
   } else {
     return;
   }
@@ -469,6 +480,8 @@ void publicarEstado() {
   doc["aguardando_nome"] = aguardandoNome;
   if (aguardandoNome) doc["nome_sugerido"] = experimentos::nomeSugerido();
 
+  doc["analise_dados_habilitada"] = configuracoes::analiseDadosHabilitada();
+
   char payload[384];
   const size_t tamanho = serializeJson(doc, payload, sizeof(payload));
   enviarLinha(payload, tamanho);
@@ -632,6 +645,20 @@ void publicarResultadoNomeMedicao(bool ok, bool nomeExiste) {
   doc["topico"] = "resultado_nome_medicao";
   doc["ok"] = ok;
   doc["nome_existe"] = nomeExiste;
+
+  char payload[96];
+  const size_t tamanho = serializeJson(doc, payload, sizeof(payload));
+  enviarLinha(payload, tamanho);
+}
+
+void publicarResultadoAcaoProtegida(const char* acao, bool ok) {
+  TravaBt trava;
+  if (!clienteConectado) return;
+
+  JsonDocument doc;
+  doc["topico"] = "resultado_acao_protegida";
+  doc["acao"] = acao;
+  doc["ok"] = ok;
 
   char payload[96];
   const size_t tamanho = serializeJson(doc, payload, sizeof(payload));

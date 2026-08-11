@@ -45,7 +45,9 @@ enum class CommandType : uint8_t {
   GetChannels,
   ReadFileData,
   SetDeviceName,
-  SetDateTime         // epoch UTC (segundos) enviado pelo app ao conectar
+  SetDateTime,        // epoch UTC (segundos) enviado pelo app ao conectar
+  SetDataAnalysisEnabled,
+  SetPassword
 };
 
 enum class Origem : uint8_t { Local, Bluetooth };

@@ -18,6 +18,8 @@ enum class Tela : uint8_t {
   Volume,
   Manual,
   Sobre,
+  SenhaValidar,
+  AnaliseDadosToggle,
 
   ConfigCanais,
   ConfigCanaisTodos,

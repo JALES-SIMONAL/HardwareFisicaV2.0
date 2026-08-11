@@ -718,7 +718,8 @@ void desenharGradeModulos(const char* titulo, uint8_t dimensao,
   display->flush();
 }
 
-void desenharTecladoTexto(const char* nomeAtual, const char* const* rotulos, uint8_t quantidade,
+void desenharTecladoTexto(const char* rotuloCampo, const char* valorAtual,
+                          const char* const* rotulos, uint8_t quantidade,
                           uint8_t indiceSelecionado) {
   if (!displayOk) return;
   TravaBarramentoDisplay travaBus;
@@ -727,7 +728,8 @@ void desenharTecladoTexto(const char* nomeAtual, const char* const* rotulos, uin
   display->fillScreen(COR_FUNDO);
 
   char titulo[40];
-  snprintf(titulo, sizeof(titulo), "Nome: %s", nomeAtual != nullptr ? nomeAtual : "");
+  snprintf(titulo, sizeof(titulo), "%s: %s", rotuloCampo != nullptr ? rotuloCampo : "",
+           valorAtual != nullptr ? valorAtual : "");
   desenharCabecalhoRodape(titulo, "Gire: mover  KEY: escolher");
 
   if (quantidade == 0 || rotulos == nullptr) {

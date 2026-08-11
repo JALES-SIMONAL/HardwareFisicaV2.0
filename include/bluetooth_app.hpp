@@ -90,6 +90,12 @@ void publicarDadosArquivo(const char* nomeArquivo, uint16_t offset);
 // mesmo comando com "sobrescrever":true para confirmar a sobrescrita.
 void publicarResultadoNomeMedicao(bool ok, bool nomeExiste);
 
+// Publicada em resposta a qualquer ação protegida por senha
+// ("set_device_name", "set_data_analysis_enabled", "set_password" — ver
+// configuracoes::validarSenha). "acao" repete o nome da ação BLE recebida,
+// pra o app saber qual pedido falhou/teve sucesso.
+void publicarResultadoAcaoProtegida(const char* acao, bool ok);
+
 // Derruba a conexão BLE atual (se houver), forçando o app a reconectar —
 // usado pelo item "Reconectar" da tela "Conexao com app".
 void reconectar();

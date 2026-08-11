@@ -105,9 +105,13 @@ void desenharGradeModulos(const char* titulo, uint8_t dimensao,
 // Editor de texto em grade tipo teclado: mostra TODOS os símbolos do
 // alfabeto de uma vez (em vez de um por vez), com o símbolo atualmente
 // selecionado destacado — "rotulos" tem um texto curto por símbolo (ex.:
-// "A", "_" para espaço, "OK" para o marcador de fim). "nomeAtual" aparece
-// no cabeçalho, mostrando o texto já digitado até agora.
-void desenharTecladoTexto(const char* nomeAtual, const char* const* rotulos, uint8_t quantidade,
+// "A", "_" para espaço, "OK" para o marcador de fim). O cabeçalho mostra
+// "<rotuloCampo>: <valorAtual>" — ex. "Nome: ABC" ou "Senha: ***" —, pra
+// deixar claro o que está sendo digitado (nome de arquivo, nome do
+// dispositivo BT, senha etc.), já que o mesmo editor é reaproveitado pra
+// todos esses casos.
+void desenharTecladoTexto(const char* rotuloCampo, const char* valorAtual,
+                          const char* const* rotulos, uint8_t quantidade,
                           uint8_t indiceSelecionado);
 
 // ---------------------------------------------------------------------

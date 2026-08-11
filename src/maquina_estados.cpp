@@ -157,16 +157,27 @@ constexpr const char* ITENS_EXPERIMENTOS[] = {
     "Rodar experimento livre",
     "Teste de canal/sensor",
     "Gerenciamento de arquivos",
-    "Conexao com app",
     "Voltar",
 };
-constexpr uint8_t QTD_EXPERIMENTOS = 5;
+constexpr uint8_t QTD_EXPERIMENTOS = 4;
 
+// "Conexao com app" mudou de Experimentos para cá — mesmo lugar (menu de
+// nivel do equipamento) onde a analogia mais direta do app (Configuracoes)
+// ja tinha esse acesso.
 constexpr const char* ITENS_CONFIGURACOES[] = {
-    "Modo de operacao", "Brilho da tela",       "Volume",  "Config. canais/sensores",
-    "Manual",           "Sobre",                "Voltar",
+    "Conexao com app",  "Modo de operacao", "Brilho da tela",       "Volume",
+    "Config. canais/sensores", "Manual",    "Sobre", "Analise de dados", "Voltar",
 };
-constexpr uint8_t QTD_CONFIGURACOES = 7;
+constexpr uint8_t QTD_CONFIGURACOES = 9;
+// Índice de "Analise de dados" em ITENS_CONFIGURACOES — usado por
+// redesenharConfiguracoes() para acrescentar "ON"/"OFF" ao rótulo (o
+// usuário não tinha como saber o estado atual sem entrar no item).
+constexpr uint8_t INDICE_ANALISE_DADOS_CONFIGURACOES = 7;
+
+// "Ativado"/"Desativado" pra Tela::AnaliseDadosToggle — mesmo padrao de
+// ITENS_MODO_OPERACAO.
+constexpr const char* ITENS_ANALISE_DADOS_TOGGLE[] = {"Ativado", "Desativado", "Voltar"};
+constexpr uint8_t QTD_ANALISE_DADOS_TOGGLE = 3;
 
 constexpr const char* ITENS_MODO_OPERACAO[] = {
     "Controle pelo hardware",
@@ -226,6 +237,7 @@ uint8_t quantidadeOpcoesTela(Tela tela) {
     case Tela::Experimentos: return QTD_EXPERIMENTOS;
     case Tela::Configuracoes: return QTD_CONFIGURACOES;
     case Tela::ModoOperacao: return QTD_MODO_OPERACAO;
+    case Tela::AnaliseDadosToggle: return QTD_ANALISE_DADOS_TOGGLE;
     case Tela::ConfigCanais: return QTD_CONFIG_CANAIS;
     case Tela::ConfigCanaisTodos:
     case Tela::ConfigCanaisIndividualEditar:
@@ -248,6 +260,9 @@ const char* tituloOpcaoMenu(Tela tela, uint8_t indice) {
       return (indice < QTD_CONFIGURACOES) ? ITENS_CONFIGURACOES[indice] : "Opcao invalida";
     case Tela::ModoOperacao:
       return (indice < QTD_MODO_OPERACAO) ? ITENS_MODO_OPERACAO[indice] : "Opcao invalida";
+    case Tela::AnaliseDadosToggle:
+      return (indice < QTD_ANALISE_DADOS_TOGGLE) ? ITENS_ANALISE_DADOS_TOGGLE[indice]
+                                                  : "Opcao invalida";
     case Tela::ConfigCanais:
       return (indice < QTD_CONFIG_CANAIS) ? ITENS_CONFIG_CANAIS[indice] : "Opcao invalida";
     case Tela::ConfigCanaisTodos:
@@ -264,18 +279,28 @@ const char* tituloOpcaoMenu(Tela tela, uint8_t indice) {
 }
 
 // Editor de texto genérico (usado para salvar um experimento novo, renomear
-// um arquivo existente e renomear o dispositivo BLE). Alfabeto: [FIM] e
-// [APAGAR] primeiro (permitem terminar ou apagar o último caractere a
-// qualquer momento), depois espaço, letras A-Z e dígitos 0-9.
-constexpr char ALFABETO_NOME[] = "\x01\x02 ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+// um arquivo existente e renomear o dispositivo BLE). Alfabeto: [FIM],
+// [APAGAR] e [CANCELAR] primeiro (permitem terminar, apagar o último
+// caractere ou desistir e voltar sem salvar a qualquer momento — sem
+// [CANCELAR], não havia como sair da tela de senha sem acertar a senha; o
+// encoder local só gera Next/Previous/Confirm, nunca um "Voltar" de
+// verdade, então o cancelamento PRECISA ser um símbolo do alfabeto, não um
+// botão físico separado), depois espaço, letras A-Z e dígitos 0-9.
+constexpr char ALFABETO_NOME[] = "\x01\x02\x03 ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
 constexpr uint8_t MARCADOR_FIM_INDICE = 0;
 constexpr uint8_t MARCADOR_APAGAR_INDICE = 1;
+constexpr uint8_t MARCADOR_CANCELAR_INDICE = 2;
 constexpr uint8_t QTD_ALFABETO_NOME = sizeof(ALFABETO_NOME) - 1;
 // 20 cobre tanto nomes de arquivo quanto o nome BLE (bluetooth_app::
 // TAMANHO_MAX_NOME_DISPOSITIVO_BT), que reaproveita este mesmo editor.
 constexpr uint8_t TAMANHO_MAX_NOME_ARQUIVO = 20;
 
-enum class ModoEdicaoNome : uint8_t { SalvarExperimento, RenomearArquivo, RenomearDispositivoBT };
+enum class ModoEdicaoNome : uint8_t {
+  SalvarExperimento,
+  RenomearArquivo,
+  RenomearDispositivoBT,
+  ValidarSenha,
+};
 ModoEdicaoNome modoEdicaoNome = ModoEdicaoNome::SalvarExperimento;
 
 struct EstadoNomeArquivo {
@@ -285,6 +310,15 @@ struct EstadoNomeArquivo {
 };
 EstadoNomeArquivo nomeArquivo;
 char nomeArquivoPendente[TAMANHO_MAX_NOME_ARQUIVO + 1] = "";
+
+// Duas ações locais também são protegidas por senha (mesma senha das ações
+// BLE equivalentes — ver configuracoes::validarSenha): renomear o
+// dispositivo BT e ativar/entrar em "Analise de dados" quando ela estiver
+// desativada em Configuracoes. Validada uma vez, vale pro resto da sessão
+// (desde o boot) — não persiste nem expira sozinha.
+enum class AcaoAposSenha : uint8_t { Nenhuma, AbrirAnaliseDados, AbrirRenomearBT, AbrirToggleAnalise };
+AcaoAposSenha acaoAposSenha = AcaoAposSenha::Nenhuma;
+bool senhaValidadaNestaSessao = false;
 
 // +5 = ".csv" + '\0' — precisa caber o nome inteiro devolvido por
 // armazenamento::listarArquivos() (ver comentário em InfoArquivo::nome).
@@ -461,6 +495,49 @@ void voltarUmNivel() {
   precisaRedesenhar = true;
 }
 
+void executarAcaoAposSenha() {
+  const AcaoAposSenha acao = acaoAposSenha;
+  acaoAposSenha = AcaoAposSenha::Nenhuma;
+  switch (acao) {
+    case AcaoAposSenha::AbrirAnaliseDados:
+      navegarPara(Tela::AnaliseSelecionarArquivo);
+      break;
+    case AcaoAposSenha::AbrirRenomearBT:
+      modoEdicaoNome = ModoEdicaoNome::RenomearDispositivoBT;
+      std::strncpy(nomeArquivo.buffer, bluetooth_app::nomeDispositivo(), sizeof(nomeArquivo.buffer) - 1);
+      nomeArquivo.buffer[sizeof(nomeArquivo.buffer) - 1] = '\0';
+      nomeArquivo.posicaoCursor = static_cast<uint8_t>(std::strlen(nomeArquivo.buffer));
+      nomeArquivo.indiceAlfabetoAtual = 0;
+      navegarPara(Tela::ConexaoAppRenomear);
+      break;
+    case AcaoAposSenha::AbrirToggleAnalise:
+      navegarPara(Tela::AnaliseDadosToggle);
+      break;
+    case AcaoAposSenha::Nenhuma:
+    default:
+      voltarUmNivel();
+      break;
+  }
+}
+
+// Ponto único de entrada pras duas ações locais protegidas (ver
+// AcaoAposSenha) — pula direto pra ação se a senha já foi validada nesta
+// sessão (desde o boot), senão manda pro editor de texto reaproveitado
+// (mesmo usado para nomear arquivo/dispositivo BT) em modo ValidarSenha.
+void solicitarSenhaOuExecutar(AcaoAposSenha acao) {
+  acaoAposSenha = acao;
+  if (senhaValidadaNestaSessao) {
+    executarAcaoAposSenha();
+    return;
+  }
+
+  modoEdicaoNome = ModoEdicaoNome::ValidarSenha;
+  nomeArquivo.buffer[0] = '\0';
+  nomeArquivo.posicaoCursor = 0;
+  nomeArquivo.indiceAlfabetoAtual = 0;
+  navegarPara(Tela::SenhaValidar);
+}
+
 const char* nomeTela(Tela tela) {
   switch (tela) {
     case Tela::Boot: return "Boot";
@@ -471,6 +548,8 @@ const char* nomeTela(Tela tela) {
     case Tela::Volume: return "Volume";
     case Tela::Manual: return "Manual";
     case Tela::Sobre: return "Sobre";
+    case Tela::SenhaValidar: return "Senha";
+    case Tela::AnaliseDadosToggle: return "Analise de dados";
     case Tela::ConfigCanais: return "Config. canais";
     case Tela::ConfigCanaisTodos: return "Config. todos";
     case Tela::ConfigCanaisTodosConfirmar: return "Confirmar";
@@ -524,7 +603,13 @@ void tratarMenuPrincipal(const Command& cmd) {
       switch (estado.indiceSelecionado) {
         case 0: navegarPara(Tela::Configuracoes); break;
         case 1: navegarPara(Tela::Experimentos); break;
-        case 2: navegarPara(Tela::AnaliseSelecionarArquivo); break;
+        case 2:
+          if (configuracoes::analiseDadosHabilitada()) {
+            navegarPara(Tela::AnaliseSelecionarArquivo);
+          } else {
+            solicitarSenhaOuExecutar(AcaoAposSenha::AbrirAnaliseDados);
+          }
+          break;
         default: break;
       }
       break;
@@ -552,8 +637,7 @@ void tratarExperimentos(const Command& cmd) {
           break;
         case 1: navegarPara(Tela::TesteCanais); break;
         case 2: navegarPara(Tela::GerenciamentoArquivos); break;
-        case 3: navegarPara(Tela::ConexaoApp); break;
-        case 4: voltarUmNivel(); break;
+        case 3: voltarUmNivel(); break;
         default: break;
       }
       break;
@@ -694,6 +778,21 @@ void finalizarEdicaoNomeArquivo() {
     return;
   }
 
+  if (modoEdicaoNome == ModoEdicaoNome::ValidarSenha) {
+    if (!configuracoes::validarSenha(nomeFinal)) {
+      // Senha errada: some com o que foi digitado e deixa tentar de novo,
+      // igual ao "nome vazio" acima — não sai da tela sozinho.
+      ihm::beep(150);
+      nomeArquivo.buffer[0] = '\0';
+      nomeArquivo.posicaoCursor = 0;
+      precisaRedesenhar = true;
+      return;
+    }
+    senhaValidadaNestaSessao = true;
+    executarAcaoAposSenha();
+    return;
+  }
+
   if (modoEdicaoNome == ModoEdicaoNome::RenomearDispositivoBT) {
     bluetooth_app::definirNomeDispositivo(nomeFinal);
     navegarPara(Tela::ConexaoApp);
@@ -730,6 +829,17 @@ void finalizarEdicaoNomeArquivo() {
   }
 }
 
+// Símbolo [ESC] (MARCADOR_CANCELAR_INDICE) ou "back" via BLE: desiste da
+// edição sem salvar nada, para todos os modos — não descarta dados já
+// existentes (ex.: em ValidarSenha, a medição continua aguardando nome no
+// equipamento; só a ação pendente é esquecida).
+void cancelarEdicaoNomeArquivo() {
+  if (modoEdicaoNome == ModoEdicaoNome::ValidarSenha) {
+    acaoAposSenha = AcaoAposSenha::Nenhuma;
+  }
+  voltarUmNivel();
+}
+
 void tratarEdicaoNomeArquivo(const Command& cmd) {
   switch (cmd.tipo) {
     case CommandType::Next:
@@ -743,6 +853,11 @@ void tratarEdicaoNomeArquivo(const Command& cmd) {
       precisaRedesenhar = true;
       break;
     case CommandType::Confirm: {
+      if (nomeArquivo.indiceAlfabetoAtual == MARCADOR_CANCELAR_INDICE) {
+        cancelarEdicaoNomeArquivo();
+        break;
+      }
+
       if (nomeArquivo.indiceAlfabetoAtual == MARCADOR_APAGAR_INDICE) {
         // Apaga o último caractere (se houver) e permanece no próprio
         // símbolo [APAGAR] — permite apagar vários seguidos sem precisar
@@ -772,6 +887,14 @@ void tratarEdicaoNomeArquivo(const Command& cmd) {
       }
       break;
     }
+    case CommandType::Back:
+      // O encoder local nunca gera Back (só Next/Previous/Confirm — ver
+      // símbolo [ESC]/MARCADOR_CANCELAR_INDICE acima, que é o cancelamento
+      // de verdade alcançável fisicamente); isto só importa se algum dia o
+      // app mandar um "back" bruto pelo BLE enquanto o equipamento estiver
+      // nesta tela.
+      cancelarEdicaoNomeArquivo();
+      break;
     default:
       break;
   }
@@ -928,12 +1051,7 @@ void tratarConexaoApp(const Command& cmd) {
       break;
     case CommandType::Confirm:
       if (estado.indiceSelecionado == ITEM_RENOMEAR) {
-        modoEdicaoNome = ModoEdicaoNome::RenomearDispositivoBT;
-        std::strncpy(nomeArquivo.buffer, bluetooth_app::nomeDispositivo(), sizeof(nomeArquivo.buffer) - 1);
-        nomeArquivo.buffer[sizeof(nomeArquivo.buffer) - 1] = '\0';
-        nomeArquivo.posicaoCursor = static_cast<uint8_t>(std::strlen(nomeArquivo.buffer));
-        nomeArquivo.indiceAlfabetoAtual = 0;
-        navegarPara(Tela::ConexaoAppRenomear);
+        solicitarSenhaOuExecutar(AcaoAposSenha::AbrirRenomearBT);
       } else if (estado.indiceSelecionado == ITEM_RECONECTAR) {
         bluetooth_app::reconectar();
         precisaRedesenhar = true;
@@ -1405,13 +1523,15 @@ void tratarConfiguracoes(const Command& cmd) {
       break;
     case CommandType::Confirm:
       switch (estado.indiceSelecionado) {
-        case 0: navegarPara(Tela::ModoOperacao); break;
-        case 1: navegarPara(Tela::Brilho); break;
-        case 2: navegarPara(Tela::Volume); break;
-        case 3: navegarPara(Tela::ConfigCanais); break;
-        case 4: navegarPara(Tela::Manual); break;
-        case 5: navegarPara(Tela::Sobre); break;
-        case 6: voltarUmNivel(); break;
+        case 0: navegarPara(Tela::ConexaoApp); break;
+        case 1: navegarPara(Tela::ModoOperacao); break;
+        case 2: navegarPara(Tela::Brilho); break;
+        case 3: navegarPara(Tela::Volume); break;
+        case 4: navegarPara(Tela::ConfigCanais); break;
+        case 5: navegarPara(Tela::Manual); break;
+        case 6: navegarPara(Tela::Sobre); break;
+        case 7: solicitarSenhaOuExecutar(AcaoAposSenha::AbrirToggleAnalise); break;
+        case 8: voltarUmNivel(); break;
         default: break;
       }
       break;
@@ -1441,6 +1561,43 @@ void tratarModoOperacao(const Command& cmd) {
         case 1:
           Serial.println("[ESTADO] Modo de operacao: App");
           configuracoes::definirModoOperacao(configuracoes::ModoOperacao::App);
+          voltarUmNivel();
+          break;
+        case 2:
+          voltarUmNivel();
+          break;
+        default:
+          break;
+      }
+      break;
+    default:
+      break;
+  }
+}
+
+// Só alcançada depois de solicitarSenhaOuExecutar(AbrirToggleAnalise) —
+// senha já validada nesta sessão a essa altura.
+void tratarAnaliseDadosToggle(const Command& cmd) {
+  switch (cmd.tipo) {
+    case CommandType::Next:
+      estado.indiceSelecionado = (estado.indiceSelecionado + 1) % QTD_ANALISE_DADOS_TOGGLE;
+      precisaRedesenhar = true;
+      break;
+    case CommandType::Previous:
+      estado.indiceSelecionado = (estado.indiceSelecionado == 0) ? QTD_ANALISE_DADOS_TOGGLE - 1
+                                                                    : estado.indiceSelecionado - 1;
+      precisaRedesenhar = true;
+      break;
+    case CommandType::Confirm:
+      switch (estado.indiceSelecionado) {
+        case 0:
+          configuracoes::definirAnaliseDadosHabilitada(true);
+          bluetooth_app::publicarEstado();
+          voltarUmNivel();
+          break;
+        case 1:
+          configuracoes::definirAnaliseDadosHabilitada(false);
+          bluetooth_app::publicarEstado();
           voltarUmNivel();
           break;
         case 2:
@@ -1899,11 +2056,11 @@ void redesenharExperimentoExecucao() {
   ihm::desenharListaMenu(titulo, itens, NUM_ITENS_EXPERIMENTO_EXECUCAO, estado.indiceSelecionado, offsetFixo);
 }
 
-// Rótulo curto (até 2 caracteres) por símbolo do alfabeto, para o teclado
-// em grade — construído uma única vez (os símbolos nunca mudam) e
-// reaproveitado a cada redesenho.
+// Rótulo curto (até 3 caracteres — "ESC" precisa dos 3) por símbolo do
+// alfabeto, para o teclado em grade — construído uma única vez (os
+// símbolos nunca mudam) e reaproveitado a cada redesenho.
 const char* const* rotulosAlfabeto() {
-  static char buffers[QTD_ALFABETO_NOME][3];
+  static char buffers[QTD_ALFABETO_NOME][4];
   static const char* rotulos[QTD_ALFABETO_NOME];
   static bool preparado = false;
 
@@ -1913,6 +2070,8 @@ const char* const* rotulosAlfabeto() {
         std::strcpy(buffers[i], "OK");
       } else if (i == MARCADOR_APAGAR_INDICE) {
         std::strcpy(buffers[i], "<-");
+      } else if (i == MARCADOR_CANCELAR_INDICE) {
+        std::strcpy(buffers[i], "ESC");
       } else if (ALFABETO_NOME[i] == ' ') {
         std::strcpy(buffers[i], "_");
       } else {
@@ -1928,8 +2087,40 @@ const char* const* rotulosAlfabeto() {
 }
 
 void redesenharEdicaoNomeArquivo() {
-  ihm::desenharTecladoTexto(nomeArquivo.buffer, rotulosAlfabeto(), QTD_ALFABETO_NOME,
+  // Mesmo editor reaproveitado pra nome de arquivo, nome do dispositivo BT
+  // e senha — o rótulo do campo (e, pra senha, mascarar o que foi digitado)
+  // é o que diferencia visualmente cada caso, senão fica tudo "Nome: ...".
+  if (modoEdicaoNome == ModoEdicaoNome::ValidarSenha) {
+    char mascara[TAMANHO_MAX_NOME_ARQUIVO + 1];
+    const size_t comprimento = std::strlen(nomeArquivo.buffer);
+    for (size_t i = 0; i < comprimento; i++) mascara[i] = '*';
+    mascara[comprimento] = '\0';
+    ihm::desenharTecladoTexto("Senha", mascara, rotulosAlfabeto(), QTD_ALFABETO_NOME,
+                              nomeArquivo.indiceAlfabetoAtual);
+    return;
+  }
+
+  const char* rotuloCampo =
+      (modoEdicaoNome == ModoEdicaoNome::RenomearDispositivoBT) ? "Nome BT" : "Nome";
+  ihm::desenharTecladoTexto(rotuloCampo, nomeArquivo.buffer, rotulosAlfabeto(), QTD_ALFABETO_NOME,
                             nomeArquivo.indiceAlfabetoAtual);
+}
+
+// Mesmo array de ITENS_CONFIGURACOES, só que com "Analise de dados"
+// mostrando "ON"/"OFF" — sem isso o usuário só descobria o estado atual
+// entrando no item.
+void redesenharConfiguracoes() {
+  const char* itens[QTD_CONFIGURACOES];
+  char rotuloAnalise[24];
+  snprintf(rotuloAnalise, sizeof(rotuloAnalise), "Analise de dados: %s",
+           configuracoes::analiseDadosHabilitada() ? "ON" : "OFF");
+
+  for (uint8_t i = 0; i < QTD_CONFIGURACOES; i++) {
+    itens[i] = (i == INDICE_ANALISE_DADOS_CONFIGURACOES) ? rotuloAnalise : ITENS_CONFIGURACOES[i];
+  }
+
+  ihm::desenharListaMenu("Configuracoes", itens, QTD_CONFIGURACOES, estado.indiceSelecionado,
+                          estado.offsetRolagem);
 }
 
 void redesenharGerenciamentoArquivos() {
@@ -2217,12 +2408,16 @@ void redesenharTelaAtual() {
                               estado.indiceSelecionado, estado.offsetRolagem);
       break;
     case Tela::Configuracoes:
-      ihm::desenharListaMenu("Configuracoes", ITENS_CONFIGURACOES, QTD_CONFIGURACOES,
-                              estado.indiceSelecionado, estado.offsetRolagem);
+      redesenharConfiguracoes();
       break;
     case Tela::ModoOperacao:
       ihm::desenharListaMenu("Modo de operacao", ITENS_MODO_OPERACAO, QTD_MODO_OPERACAO,
                               estado.indiceSelecionado, estado.offsetRolagem);
+      break;
+    case Tela::AnaliseDadosToggle:
+      ihm::desenharListaMenu("Analise de dados", ITENS_ANALISE_DADOS_TOGGLE,
+                              QTD_ANALISE_DADOS_TOGGLE, estado.indiceSelecionado,
+                              estado.offsetRolagem);
       break;
     case Tela::Brilho:
       redesenharValorComVoltar("Brilho", configuracoes::brilho(), configuracoes::NIVEL_MINIMO,
@@ -2295,6 +2490,7 @@ void redesenharTelaAtual() {
     case Tela::ExperimentoNomeArquivo:
     case Tela::ArquivoRenomear:
     case Tela::ConexaoAppRenomear:
+    case Tela::SenhaValidar:
       redesenharEdicaoNomeArquivo();
       break;
     case Tela::ExperimentoSobrescreverConfirmar: {
@@ -2652,12 +2848,35 @@ void processarComando(const Command& cmd, Origem /*origem*/) {
       bluetooth_app::publicarDadosArquivo(cmd.texto, static_cast<uint16_t>(cmd.valor));
       return;
     case CommandType::SetDeviceName:
+      if (!configuracoes::validarSenha(cmd.texto2)) {
+        bluetooth_app::publicarResultadoAcaoProtegida("set_device_name", false);
+        return;
+      }
       bluetooth_app::definirNomeDispositivo(cmd.texto);
+      bluetooth_app::publicarResultadoAcaoProtegida("set_device_name", true);
       if (estado.telaAtual == Tela::ConexaoApp) precisaRedesenhar = true;
       return;
     case CommandType::SetDateTime:
       tempo::definirEpoch(static_cast<uint32_t>(cmd.valor));
       return;
+    case CommandType::SetDataAnalysisEnabled:
+      if (!configuracoes::validarSenha(cmd.texto)) {
+        bluetooth_app::publicarResultadoAcaoProtegida("set_data_analysis_enabled", false);
+        return;
+      }
+      configuracoes::definirAnaliseDadosHabilitada(cmd.valor != 0);
+      bluetooth_app::publicarResultadoAcaoProtegida("set_data_analysis_enabled", true);
+      bluetooth_app::publicarEstado();
+      return;
+    case CommandType::SetPassword: {
+      if (!configuracoes::validarSenha(cmd.texto)) {
+        bluetooth_app::publicarResultadoAcaoProtegida("set_password", false);
+        return;
+      }
+      const bool ok = configuracoes::definirSenha(cmd.texto2);
+      bluetooth_app::publicarResultadoAcaoProtegida("set_password", ok);
+      return;
+    }
     default:
       break;
   }
@@ -2671,6 +2890,9 @@ void processarComando(const Command& cmd, Origem /*origem*/) {
       break;
     case Tela::ModoOperacao:
       tratarModoOperacao(cmd);
+      break;
+    case Tela::AnaliseDadosToggle:
+      tratarAnaliseDadosToggle(cmd);
       break;
     case Tela::Brilho:
       tratarBrilho(cmd);
@@ -2720,6 +2942,7 @@ void processarComando(const Command& cmd, Origem /*origem*/) {
     case Tela::ExperimentoNomeArquivo:
     case Tela::ArquivoRenomear:
     case Tela::ConexaoAppRenomear:
+    case Tela::SenhaValidar:
       tratarEdicaoNomeArquivo(cmd);
       break;
     case Tela::ExperimentoSobrescreverConfirmar:

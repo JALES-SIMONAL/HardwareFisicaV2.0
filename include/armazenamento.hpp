@@ -50,6 +50,13 @@ uint16_t listarArquivos(InfoArquivo* destino, uint16_t capacidadeDestino);
 bool renomearArquivo(const char* nomeAtual, const char* novoNome);
 bool excluirArquivo(const char* nome);
 
+// Exclui todos os arquivos ".csv" (coletas) do cartão — usado tanto pelo
+// item "Excluir todos" do menu local (ArquivosExcluirTodosConfirmar) quanto
+// pelo comando Bluetooth equivalente ("delete_all_files"). Imagens de boot
+// e qualquer outro arquivo não-".csv" ficam intocados. Retorna a
+// quantidade de arquivos efetivamente removidos.
+uint16_t excluirTodosArquivosCsv();
+
 // Leitura sequencial para análise de dados: nunca carrega o arquivo inteiro
 // na RAM, só uma linha por vez.
 bool abrirParaLeitura(const char* nomeComExtensao);

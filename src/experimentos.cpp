@@ -1,6 +1,7 @@
 #include "experimentos.hpp"
 
 #include <Arduino.h>
+#include <Preferences.h>
 #include <cstdio>
 #include <cstring>
 #include <esp_timer.h>
@@ -11,12 +12,45 @@
 #include "armazenamento.hpp"
 #include "bluetooth_app.hpp"
 #include "ihm.hpp"
+#include "tempo.hpp"
 
 namespace experimentos {
 
 namespace {
 
 constexpr const char* NOME_ARQUIVO_TRABALHO = "_tmp_exp";
+
+// Mesmo tamanho de maquina_estados::TAMANHO_MAX_NOME_ARQUIVO (limite do
+// editor de nome, local ou pelo app).
+constexpr uint8_t TAMANHO_MAX_NOME_SUGERIDO = 20;
+char nomeSugeridoBuffer[TAMANHO_MAX_NOME_SUGERIDO + 1] = "";
+
+// Contador persistido na NVS p/ sugerir "MEDICAOn" quando o horário ainda
+// não foi recebido do app. Incrementado a cada medição finalizada, mesmo
+// que o usuário troque o nome sugerido.
+constexpr const char* NAMESPACE_PREFS_MEDICAO = "hwfisica_med";
+
+uint32_t proximoNumeroMedicao() {
+  Preferences prefs;
+  prefs.begin(NAMESPACE_PREFS_MEDICAO, false);
+  const uint32_t proximo = prefs.getUInt("prox", 1);
+  prefs.putUInt("prox", proximo + 1);
+  prefs.end();
+  return proximo;
+}
+
+// Nome sugerido ao entrar em AguardandoNome: data/hora (DD-MM-AAAA_HH-MM)
+// se o app já informou o horário atual nesta conexão, ou "MEDICAO" + número
+// crescente caso contrário. Gerado UMA ÚNICA VEZ por medição finalizada
+// (ver finalizarRepeticaoAtual) — chamar isto a cada publicação de estado
+// BLE incrementaria o contador "MEDICAOn" a cada segundo.
+void gerarNomeSugerido(char* saida, size_t tamanho) {
+  if (tempo::horarioConhecido()) {
+    tempo::formatarDataHoraAtual(saida, tamanho);
+  } else {
+    snprintf(saida, tamanho, "MEDICAO%lu", static_cast<unsigned long>(proximoNumeroMedicao()));
+  }
+}
 
 enum class Fase : uint8_t { Inativo, Executando, AguardandoNome };
 
@@ -130,6 +164,17 @@ void aoReceberEventoValido(uint8_t canal1based, bool novoEstado, int64_t tempoUs
 void init() { aquisicao::definirCallbackEventoValido(aoReceberEventoValido); }
 
 bool iniciar(uint16_t totalRepeticoesSolicitadas) {
+  // Sem isto, iniciar outra medição enquanto a anterior ainda está
+  // aguardando nome (Fase::AguardandoNome) sobrescreveria silenciosamente
+  // "_tmp_exp.csv" (mesmo nome de trabalho fixo), destruindo os dados da
+  // medição anterior antes do usuário salvá-la com nome — cenário real
+  // quando uma queda de BLE deixa a medição anterior pendurada sem nome e o
+  // app (ou o usuário, localmente) tenta começar de novo sem perceber.
+  portENTER_CRITICAL(&mux);
+  const bool pendenteDeNome = (fase == Fase::AguardandoNome);
+  portEXIT_CRITICAL(&mux);
+  if (pendenteDeNome) return false;
+
   uint16_t total = totalRepeticoesSolicitadas;
   if (total < 1) total = 1;
   if (total > MAX_REPETICOES) total = MAX_REPETICOES;
@@ -174,6 +219,9 @@ void finalizarRepeticaoAtual() {
     portENTER_CRITICAL(&mux);
     fase = Fase::AguardandoNome;
     portEXIT_CRITICAL(&mux);
+    // Fora da secao critica: gerarNomeSugerido() pode fazer I/O na NVS
+    // (Preferences), que nao pode rodar com interrupcoes desabilitadas.
+    gerarNomeSugerido(nomeSugeridoBuffer, sizeof(nomeSugeridoBuffer));
     return;
   }
 
@@ -235,6 +283,12 @@ bool aguardandoNomeArquivo() {
   portEXIT_CRITICAL(&mux);
   return r;
 }
+
+// nomeSugeridoBuffer só é escrito por gerarNomeSugerido() (chamada uma
+// única vez por medição, fora de secao critica, em finalizarRepeticaoAtual)
+// e lido aqui — sem necessidade de mux, mas só faz sentido consultar
+// enquanto aguardandoNomeArquivo() for true.
+const char* nomeSugerido() { return nomeSugeridoBuffer; }
 
 uint16_t repeticaoAtual() {
   portENTER_CRITICAL(&mux);

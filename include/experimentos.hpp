@@ -37,6 +37,12 @@ void atualizarLedsPiscando();
 bool emAndamento();
 bool aguardandoNomeArquivo();
 
+// Nome sugerido para a medição atualmente aguardando nome (gerado uma
+// única vez ao entrar em AguardandoNome — data/hora se conhecida, senão
+// "MEDICAOn" com contador persistido). String vazia se não houver medição
+// aguardando nome.
+const char* nomeSugerido();
+
 uint16_t repeticaoAtual();
 uint16_t totalRepeticoes();
 uint32_t eventosNaRepeticaoAtual();

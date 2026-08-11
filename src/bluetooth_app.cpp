@@ -70,6 +70,14 @@ unsigned long ultimaPublicacaoEstadoMs = 0;
 unsigned long ultimaPublicacaoTesteCanaisMs = 0;
 constexpr uint32_t INTERVALO_PUBLICACAO_TESTE_CANAIS_MS = 300;
 
+// Rede de segurança da reconexão BLE: enquanto não há app conectado,
+// confirma periodicamente que o advertising está mesmo ativo e reinicia se
+// não estiver (ver loop()). Cobre qualquer cenário em que o restart
+// automático da lib (ServerCallbacks::onDisconnect) não tenha pego —
+// silencioso na maioria das voltas do loop, só age quando de fato preciso.
+unsigned long ultimaChecagemAdvertisingMs = 0;
+constexpr uint32_t INTERVALO_CHECAGEM_ADVERTISING_MS = 5000;
+
 // Paginação da tabela rolante de dados do arquivo (ver publicarDadosArquivo):
 // cada página traz no máximo esta quantidade de linhas de dados.
 constexpr uint16_t TAMANHO_PAGINA_DADOS_ARQUIVO = 20;
@@ -195,6 +203,12 @@ void processarLinha(char* linha) {
   } else if (std::strcmp(acao, "delete_file") == 0) {
     cmd.tipo = comandos::CommandType::DeleteFile;
     std::strncpy(cmd.texto, doc["nome"] | "", sizeof(cmd.texto) - 1);
+  } else if (std::strcmp(acao, "delete_all_files") == 0) {
+    cmd.tipo = comandos::CommandType::DeleteAllFiles;
+  } else if (std::strcmp(acao, "save_measurement_name") == 0) {
+    cmd.tipo = comandos::CommandType::SaveMeasurementName;
+    std::strncpy(cmd.texto, doc["nome"] | "", sizeof(cmd.texto) - 1);
+    cmd.valor = (doc["sobrescrever"] | false) ? 1 : 0;
   } else if (std::strcmp(acao, "load_repetition") == 0) {
     cmd.tipo = comandos::CommandType::LoadRepetition;
     std::strncpy(cmd.texto, doc["arquivo"] | "", sizeof(cmd.texto) - 1);
@@ -244,16 +258,35 @@ class RxCallbacks : public NimBLECharacteristicCallbacks {
 };
 
 class ServerCallbacks : public NimBLEServerCallbacks {
-  void onConnect(NimBLEServer* /*pServidor*/, ble_gap_conn_desc* desc) override {
+  void onConnect(NimBLEServer* pServidor, ble_gap_conn_desc* desc) override {
     TravaBt trava;
     connHandleAtual = desc->conn_handle;
     clienteConectado = true;
+
+    // Pede um supervision timeout curto (4s) ao central: sem isso, o
+    // padrao negociado por Android/iOS/Windows costuma passar de 15-20s, e
+    // só depois desse tempo o firmware percebe que o link caiu (silencio de
+    // rádio, fora de alcance) e volta a anunciar — na prática, um "cair e
+    // não reconectar" por quase meio minuto. min/max interval em unidades
+    // de 1.25ms (24=30ms, 40=50ms), latency 0, timeout em unidades de 10ms
+    // (400=4s). Valores dentro das faixas recomendadas pela Apple (timeout
+    // > 2*maxInterval*(1+latency), interval >= 15ms) para não serem
+    // rejeitados/renegociados pelo central.
+    pServidor->updateConnParams(desc->conn_handle, 24, 40, 0, 400);
   }
 
   void onDisconnect(NimBLEServer* /*pServidor*/, ble_gap_conn_desc* /*desc*/) override {
     TravaBt trava;
     connHandleAtual = BLE_HS_CONN_HANDLE_NONE;
     clienteConectado = false;
+
+    // O NimBLE-Arduino já reanuncia sozinho após uma desconexão
+    // (NimBLEServer::m_advertiseOnDisconnect, default true — ver
+    // handleGapEvent/BLE_GAP_EVENT_DISCONNECT na lib). Esta chamada é só
+    // defensiva/explícita: garante a reconexão mesmo que esse default mude
+    // numa atualização futura da lib, e é barata (startAdvertising() é
+    // no-op se o advertising já estiver ativo).
+    if (pAdvertising != nullptr) pAdvertising->start();
   }
 };
 
@@ -364,7 +397,17 @@ void loop() {
   }
   clienteConectadoAnterior = conectadoAgora;
 
-  if (!conectadoAgora) return;
+  if (!conectadoAgora) {
+    const unsigned long agora = millis();
+    if (pAdvertising != nullptr && agora - ultimaChecagemAdvertisingMs >= INTERVALO_CHECAGEM_ADVERTISING_MS) {
+      ultimaChecagemAdvertisingMs = agora;
+      if (!pAdvertising->isAdvertising()) {
+        Serial.println("[DIAG][BT] Advertising parado sem cliente conectado — reiniciando");
+        pAdvertising->start();
+      }
+    }
+    return;
+  }
 
   LinhaComando linha;
   while (xQueueReceive(filaComandosBt, &linha, 0) == pdTRUE) {
@@ -419,7 +462,14 @@ void publicarEstado() {
   doc["sd_usado_kb"] = static_cast<uint32_t>(armazenamento::espacoUsadoBytes() / 1024);
   doc["sd_total_kb"] = static_cast<uint32_t>(armazenamento::espacoTotalBytes() / 1024);
 
-  char payload[320];
+  // Medição finalizada (última repetição) mas ainda sem nome — arquivo
+  // fechado como "_tmp_exp.csv", esperando o app (ou o menu local) chamar
+  // "save_measurement_name". nome_sugerido só é preenchido nesse caso.
+  const bool aguardandoNome = experimentos::aguardandoNomeArquivo();
+  doc["aguardando_nome"] = aguardandoNome;
+  if (aguardandoNome) doc["nome_sugerido"] = experimentos::nomeSugerido();
+
+  char payload[384];
   const size_t tamanho = serializeJson(doc, payload, sizeof(payload));
   enviarLinha(payload, tamanho);
 }
@@ -570,6 +620,20 @@ void publicarDadosArquivo(const char* nomeArquivo, uint16_t offset) {
   doc["tem_mais"] = temMais;
 
   char payload[1536];
+  const size_t tamanho = serializeJson(doc, payload, sizeof(payload));
+  enviarLinha(payload, tamanho);
+}
+
+void publicarResultadoNomeMedicao(bool ok, bool nomeExiste) {
+  TravaBt trava;
+  if (!clienteConectado) return;
+
+  JsonDocument doc;
+  doc["topico"] = "resultado_nome_medicao";
+  doc["ok"] = ok;
+  doc["nome_existe"] = nomeExiste;
+
+  char payload[96];
   const size_t tamanho = serializeJson(doc, payload, sizeof(payload));
   enviarLinha(payload, tamanho);
 }

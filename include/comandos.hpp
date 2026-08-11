@@ -37,6 +37,8 @@ enum class CommandType : uint8_t {
   SelectFile,
   RenameFile,
   DeleteFile,
+  DeleteAllFiles,
+  SaveMeasurementName,
   Reconnect,
   ListFiles,
   LoadRepetition,

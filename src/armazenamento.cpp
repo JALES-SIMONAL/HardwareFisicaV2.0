@@ -368,6 +368,40 @@ uint16_t listarArquivos(InfoArquivo* destino, uint16_t capacidadeDestino) {
   return quantidade;
 }
 
+uint16_t excluirTodosArquivosCsv() {
+  if (!cartaoOk) return 0;
+
+  // Um unico TravaBarramentoSD para a passada inteira — NAO chamar
+  // excluirArquivo() daqui dentro (ela toma o mesmo mutex de novo, e por
+  // nao ser recursivo isso trava o firmware).
+  TravaBarramentoSD travaBus;
+  File raiz = SD.open("/");
+  if (!raiz) return 0;
+
+  uint16_t excluidos = 0;
+  File entrada = raiz.openNextFile();
+  while (entrada) {
+    char nome[32];
+    std::strncpy(nome, entrada.name(), sizeof(nome) - 1);
+    nome[sizeof(nome) - 1] = '\0';
+    const bool ehDiretorio = entrada.isDirectory();
+    entrada.close();
+
+    const size_t comprimento = std::strlen(nome);
+    const bool ehCsv = comprimento > 4 && std::strcmp(nome + comprimento - 4, ".csv") == 0;
+    if (!ehDiretorio && ehCsv) {
+      char caminho[34];
+      snprintf(caminho, sizeof(caminho), "/%s", nome);
+      if (SD.remove(caminho)) excluidos++;
+    }
+
+    entrada = raiz.openNextFile();
+  }
+  raiz.close();
+
+  return excluidos;
+}
+
 bool renomearArquivo(const char* nomeAtual, const char* novoNome) {
   if (!cartaoOk) return false;
 

@@ -84,6 +84,12 @@ void publicarEventosAnalise();
 // de dados do arquivo no app (sem equivalente na tela física).
 void publicarDadosArquivo(const char* nomeArquivo, uint16_t offset);
 
+// Publicada em resposta à ação "save_measurement_name" (medição finalizada
+// aguardando nome — ver experimentos::aguardandoNomeArquivo/nomeSugerido).
+// "nome_existe" só é relevante quando "ok" é false: o app pode reenviar o
+// mesmo comando com "sobrescrever":true para confirmar a sobrescrita.
+void publicarResultadoNomeMedicao(bool ok, bool nomeExiste);
+
 // Derruba a conexão BLE atual (se houver), forçando o app a reconectar —
 // usado pelo item "Reconectar" da tela "Conexao com app".
 void reconectar();

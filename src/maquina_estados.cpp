@@ -1,7 +1,6 @@
 #include "maquina_estados.hpp"
 
 #include <Arduino.h>
-#include <Preferences.h>
 #include <cstdio>
 #include <cstring>
 #include <qrcode.h>
@@ -286,36 +285,6 @@ struct EstadoNomeArquivo {
 };
 EstadoNomeArquivo nomeArquivo;
 char nomeArquivoPendente[TAMANHO_MAX_NOME_ARQUIVO + 1] = "";
-
-// Contador persistido na NVS p/ sugerir "MEDICAOn" quando o horario ainda
-// nao foi recebido do app (ver gerarNomeSugerido). Incrementado a cada
-// medicao finalizada, mesmo que o usuario troque o nome sugerido.
-constexpr const char* NAMESPACE_PREFS_MEDICAO = "hwfisica_med";
-
-uint32_t proximoNumeroMedicao() {
-  Preferences prefs;
-  prefs.begin(NAMESPACE_PREFS_MEDICAO, false);
-  const uint32_t proximo = prefs.getUInt("prox", 1);
-  prefs.putUInt("prox", proximo + 1);
-  prefs.end();
-  return proximo;
-}
-
-// Nome sugerido ao entrar na tela de nomear uma medicao recem-finalizada:
-// data/hora (DD-MM-AAAA_HH-MM, ex.: "10-08-2026_14-30") se o app ja
-// informou o horario atual nesta conexao, ou "MEDICAO" + numero crescente
-// caso contrario. 16 caracteres no total — dentro do limite de
-// TAMANHO_MAX_NOME_ARQUIVO (20). O usuario pode aceitar (Confirmar direto)
-// ou apagar/editar antes de confirmar; "/" e ":" não entram no nome porque
-// não são permitidos em arquivos no cartão SD (FAT reserva "/" como
-// separador de pasta e ":" como separador de unidade).
-void gerarNomeSugerido(char* saida, size_t tamanho) {
-  if (tempo::horarioConhecido()) {
-    tempo::formatarDataHoraAtual(saida, tamanho);
-  } else {
-    snprintf(saida, tamanho, "MEDICAO%lu", static_cast<unsigned long>(proximoNumeroMedicao()));
-  }
-}
 
 // +5 = ".csv" + '\0' — precisa caber o nome inteiro devolvido por
 // armazenamento::listarArquivos() (ver comentário em InfoArquivo::nome).
@@ -662,7 +631,8 @@ void tratarExperimentoExecucao(const Command& cmd) {
         experimentos::finalizarRepeticaoAtual();
         if (experimentos::aguardandoNomeArquivo()) {
           modoEdicaoNome = ModoEdicaoNome::SalvarExperimento;
-          gerarNomeSugerido(nomeArquivo.buffer, sizeof(nomeArquivo.buffer));
+          std::strncpy(nomeArquivo.buffer, experimentos::nomeSugerido(), sizeof(nomeArquivo.buffer) - 1);
+          nomeArquivo.buffer[sizeof(nomeArquivo.buffer) - 1] = '\0';
           nomeArquivo.posicaoCursor = static_cast<uint8_t>(std::strlen(nomeArquivo.buffer));
           nomeArquivo.indiceAlfabetoAtual = 0;
           navegarPara(Tela::ExperimentoNomeArquivo);
@@ -905,18 +875,7 @@ void tratarArquivoExcluirConfirmar(const Command& cmd) {
 }
 
 void confirmarExcluirTodosArquivosSim() {
-  // Só ".csv" (coletas) — as imagens de boot (Monkey Tech.bmp/UFRN.bmp) já
-  // nem aparecem em arquivosListados (armazenamento::listarArquivos as
-  // filtra), mas a checagem de extensão fica aqui como segunda garantia
-  // caso outro tipo de arquivo apareça no cartão no futuro.
-  uint16_t excluidos = 0;
-  for (uint16_t i = 0; i < quantidadeArquivosListados; i++) {
-    const char* nome = arquivosListados[i].nome;
-    const size_t comprimento = std::strlen(nome);
-    if (comprimento > 4 && std::strcmp(nome + comprimento - 4, ".csv") == 0) {
-      if (armazenamento::excluirArquivo(nome)) excluidos++;
-    }
-  }
+  const uint16_t excluidos = armazenamento::excluirTodosArquivosCsv();
   Serial.printf("[ARQUIVOS] Excluir todos: %u csv(s) removido(s)\n", static_cast<unsigned>(excluidos));
   bluetooth_app::publicarListaArquivos();
   navegarPara(Tela::GerenciamentoArquivos);
@@ -2634,6 +2593,48 @@ void processarComando(const Command& cmd, Origem /*origem*/) {
       bluetooth_app::publicarListaArquivos();
       precisaRedesenhar = true;
       return;
+    case CommandType::DeleteAllFiles: {
+      const uint16_t excluidos = armazenamento::excluirTodosArquivosCsv();
+      Serial.printf("[ARQUIVOS] Excluir todos (comando Bluetooth): %u csv(s) removido(s)\n",
+                    static_cast<unsigned>(excluidos));
+      bluetooth_app::publicarListaArquivos();
+      precisaRedesenhar = true;
+      return;
+    }
+    case CommandType::SaveMeasurementName: {
+      // Mesmo caminho de finalizarEdicaoNomeArquivo()/ModoEdicaoNome::
+      // SalvarExperimento (menu local), só que sem passar pela tela de
+      // edição de texto — o app já manda o nome pronto.
+      const size_t comprimento = std::strlen(cmd.texto);
+      if (comprimento == 0 || comprimento > TAMANHO_MAX_NOME_ARQUIVO) {
+        bluetooth_app::publicarResultadoNomeMedicao(false, false);
+        return;
+      }
+
+      char nomeComExtensao[TAMANHO_MAX_NOME_ARQUIVO + 5];
+      snprintf(nomeComExtensao, sizeof(nomeComExtensao), "%s.csv", cmd.texto);
+      const bool sobrescrever = cmd.valor != 0;
+      const bool nomeJaExiste = armazenamento::arquivoExiste(nomeComExtensao);
+      if (nomeJaExiste && !sobrescrever) {
+        // Espelha Tela::ExperimentoSobrescreverConfirmar do menu local: o
+        // app decide se pergunta ao usuário e reenvia com sobrescrever=true.
+        bluetooth_app::publicarResultadoNomeMedicao(false, true);
+        return;
+      }
+
+      const bool ok = experimentos::salvarComoArquivoFinal(cmd.texto, sobrescrever);
+      bluetooth_app::publicarResultadoNomeMedicao(ok, false);
+      if (ok) {
+        bluetooth_app::publicarListaArquivos();
+        if (estado.telaAtual == Tela::ExperimentoNomeArquivo ||
+            estado.telaAtual == Tela::ExperimentoExecucao) {
+          navegarPara(Tela::Experimentos);
+        } else {
+          precisaRedesenhar = true;
+        }
+      }
+      return;
+    }
     case CommandType::LoadRepetition:
       analise_dados::carregarRepeticao(cmd.texto, static_cast<uint16_t>(cmd.valor));
       bluetooth_app::publicarEventosAnalise();

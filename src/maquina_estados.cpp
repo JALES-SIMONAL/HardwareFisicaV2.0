@@ -132,6 +132,15 @@ struct EstadoNavegacao {
 EstadoNavegacao estado;
 bool precisaRedesenhar = false;
 
+// true enquanto o app estiver com a tela de teste de canais aberta
+// (comando Bluetooth "set_channel_test_active") — independente da tela
+// LOCAL exibida no display físico. Sem isto, os NeoPixels só acendiam
+// quando o teste era feito localmente (estado.telaAtual==Tela::TesteCanais);
+// o app já recebia os níveis (mensagem "teste_canais", publicada sempre que
+// conectado) mas os LEDs físicos nunca reagiam a um teste iniciado só pelo
+// app. Ver atualizarTelasAoVivo() e aoDesconectarBluetooth().
+bool testeCanaisAtivoRemoto = false;
+
 // Pilha de navegação: cada navegarPara() empilha a tela de origem; cada
 // voltarUmNivel() desempilha. Substitui um antigo campo único "tela
 // anterior" (histórico de só 1 nível) que travava o botão Voltar em
@@ -632,8 +641,17 @@ void tratarExperimentos(const Command& cmd) {
     case CommandType::Confirm:
       switch (estado.indiceSelecionado) {
         case 0:
-          navegarPara(Tela::ExperimentoRepeticoes);
-          edicaoValor.valorTemp = 1;
+          if (experimentos::emAndamento()) {
+            // Já existe uma medição rodando em segundo plano (usuário saiu
+            // da tela de execução por "Voltar" sem cancelar) — reabre a
+            // tela ao vivo em vez de ir para o seletor de repetições, que
+            // configuraria uma medição NOVA (e experimentos::iniciar()
+            // recusaria, já que a guarda cobre Fase::Executando).
+            navegarPara(Tela::ExperimentoExecucao);
+          } else {
+            navegarPara(Tela::ExperimentoRepeticoes);
+            edicaoValor.valorTemp = 1;
+          }
           break;
         case 1: navegarPara(Tela::TesteCanais); break;
         case 2: navegarPara(Tela::GerenciamentoArquivos); break;
@@ -691,8 +709,22 @@ void tratarExperimentoRepeticoes(const Command& cmd) {
 
 // Itens da lista da tela de execução do experimento (ver
 // redesenharExperimentoExecucao()): 0=Finalizar repetição, 1=Reiniciar
-// repetição, 2=Cancelar experimento.
-constexpr uint8_t NUM_ITENS_EXPERIMENTO_EXECUCAO = 3;
+// repetição, 2=Cancelar experimento, 3=Voltar.
+constexpr uint8_t NUM_ITENS_EXPERIMENTO_EXECUCAO = 4;
+
+// Sai da tela de execução SEM cancelar o experimento (a coleta continua em
+// segundo plano, na tarefa do núcleo 0 — ver tarefaAquisicaoArmazenamento em
+// main.cpp — independente da tela exibida). Sem isto, a única forma de sair
+// desta tela era pelo fluxo "Cancelar experimento", e responder "Não" na
+// confirmação só devolvia o usuário para esta mesma tela sem nenhuma outra
+// saída — um loop percebido pelo usuário como "preso" tentando sair.
+// navegarPara() (não voltarUmNivel()) porque Experimentos já é sempre um
+// ancestral na pilha neste ponto (foi de lá que o experimento começou),
+// então a pilha é truncada de volta pra lá em vez de crescer.
+void sairExperimentoExecucaoSemCancelar() {
+  Serial.println("[EXPERIMENTO] Saindo da tela de execucao (experimento continua em segundo plano)");
+  navegarPara(Tela::Experimentos);
+}
 
 void tratarExperimentoExecucao(const Command& cmd) {
   switch (cmd.tipo) {
@@ -725,8 +757,10 @@ void tratarExperimentoExecucao(const Command& cmd) {
         }
       } else if (estado.indiceSelecionado == 1) {
         navegarPara(Tela::ExperimentoReiniciarConfirmar);
-      } else {
+      } else if (estado.indiceSelecionado == 2) {
         navegarPara(Tela::ExperimentoCancelarConfirmar);
+      } else {
+        sairExperimentoExecucaoSemCancelar();
       }
       break;
     default:
@@ -2051,7 +2085,7 @@ void redesenharExperimentoExecucao() {
            static_cast<long long>(tempoS));
 
   const char* itens[NUM_ITENS_EXPERIMENTO_EXECUCAO] = {"Finalizar repeticao", "Reiniciar repeticao",
-                                                        "Cancelar experimento"};
+                                                        "Cancelar experimento", "Voltar"};
   uint8_t offsetFixo = 0;
   ihm::desenharListaMenu(titulo, itens, NUM_ITENS_EXPERIMENTO_EXECUCAO, estado.indiceSelecionado, offsetFixo);
 }
@@ -2166,7 +2200,14 @@ void redesenharArquivoDados() {
 // teste de canais (nível dos sensores) e execução de experimento (tempo,
 // eventos). Ambas são redesenhadas em um intervalo fixo, não a cada tick.
 void atualizarTelasAoVivo() {
-  if (estado.telaAtual == Tela::TesteCanais) {
+  // LEDs: acompanham o teste de canais tanto local (tela física em
+  // Tela::TesteCanais) quanto remoto (app com a tela aberta, ver
+  // testeCanaisAtivoRemoto) — as duas fontes usam os mesmos LEDs, nunca ao
+  // mesmo tempo na prática (um teste remoto não impede a navegação local
+  // para outra tela, mas se o usuário local também entrar em TesteCanais
+  // enquanto o app testa, os dois só concordam, já que refletem o mesmo
+  // nível físico).
+  if (estado.telaAtual == Tela::TesteCanais || testeCanaisAtivoRemoto) {
     for (uint8_t canal1based = 1; canal1based <= NUM_CHANNELS; canal1based++) {
       const uint16_t indiceLed = canal1based - 1;
       if (indiceLed >= NUM_LEDS) break;
@@ -2176,7 +2217,9 @@ void atualizarTelasAoVivo() {
         ihm::controlarLED(indiceLed, 0, 150, 0, 30);
       }
     }
+  }
 
+  if (estado.telaAtual == Tela::TesteCanais) {
     static unsigned long ultimoRedesenhoTesteMs = 0;
     const unsigned long agora = millis();
     if (agora - ultimoRedesenhoTesteMs >= 200) {
@@ -2674,6 +2717,10 @@ void tick() {
   }
 
   atualizarTelasAoVivo();
+  // Depois de atualizarTelasAoVivo() de propósito: se uma indicação de
+  // conexão/desconexão estiver em andamento, ela tem prioridade visual
+  // sobre os LEDs de nível do teste de canais, caso as duas coincidam.
+  ihm::atualizarIndicacoes();
 
   Command cmd;
 
@@ -2877,6 +2924,17 @@ void processarComando(const Command& cmd, Origem /*origem*/) {
       bluetooth_app::publicarResultadoAcaoProtegida("set_password", ok);
       return;
     }
+    case CommandType::SetChannelTestActive:
+      testeCanaisAtivoRemoto = (cmd.valor != 0);
+      Serial.printf("[EXPERIMENTO] Teste de canais remoto (app): %s\n",
+                    testeCanaisAtivoRemoto ? "ativado" : "desativado");
+      // Sem tela local também aberta em TesteCanais, nada mais vai zerar os
+      // LEDs no próximo tick — sem isto eles ficariam acesos indefinidamente
+      // após o app sair da tela.
+      if (!testeCanaisAtivoRemoto && estado.telaAtual != Tela::TesteCanais) {
+        definirTodosLeds(0, 0, 0, 0);
+      }
+      return;
     default:
       break;
   }
@@ -3005,5 +3063,18 @@ void processarComando(const Command& cmd, Origem /*origem*/) {
 }
 
 Tela telaAtual() { return estado.telaAtual; }
+
+void aoConectarBluetooth() { ihm::iniciarIndicacaoConexao(); }
+
+void aoDesconectarBluetooth() {
+  // Sem isto, um app que fecha/derruba a conexão enquanto o teste de canais
+  // está aberto (sem mandar "set_channel_test_active":false) deixava os
+  // NeoPixels acesos pra sempre — nada mais ia zerá-los. A própria
+  // animação de desconexão (pisca amarelo e apaga) já cobre isso; se a
+  // tela local estiver em TesteCanais, o próximo tick já reacende os LEDs
+  // com o nível de verdade dos canais (ver atualizarTelasAoVivo()).
+  testeCanaisAtivoRemoto = false;
+  ihm::iniciarIndicacaoDesconexao();
+}
 
 }  // namespace maquina_estados

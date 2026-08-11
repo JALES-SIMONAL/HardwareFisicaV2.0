@@ -47,7 +47,13 @@ enum class CommandType : uint8_t {
   SetDeviceName,
   SetDateTime,        // epoch UTC (segundos) enviado pelo app ao conectar
   SetDataAnalysisEnabled,
-  SetPassword
+  SetPassword,
+  // Entrar/sair da tela de teste de canais a partir do app: sem ela, o app
+  // recebia os níveis (via "teste_canais") mas os NeoPixels físicos nunca
+  // acendiam, porque quem os aciona é atualizarTelasAoVivo() em
+  // maquina_estados.cpp, condicionado só à tela LOCAL — ver
+  // testeCanaisAtivoRemoto.
+  SetChannelTestActive
 };
 
 enum class Origem : uint8_t { Local, Bluetooth };

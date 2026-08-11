@@ -73,4 +73,16 @@ void processarComando(const comandos::Command& cmd, comandos::Origem origem);
 
 Tela telaAtual();
 
+// Chamada por bluetooth_app::loop() ao detectar que um cliente conectou —
+// dispara a indicação de conexão bem-sucedida (NeoPixels piscando em azul
+// duas vezes + dois bipes, ver ihm::iniciarIndicacaoConexao()).
+void aoConectarBluetooth();
+
+// Chamada por bluetooth_app::loop() ao detectar que o cliente desconectou —
+// limpa estado que só faz sentido com o app conectado (hoje: teste de
+// canais remoto, ver testeCanaisAtivoRemoto em maquina_estados.cpp), pra
+// nunca deixar os NeoPixels acesos indefinidamente se a conexão cair sem
+// um "set_channel_test_active":false explícito.
+void aoDesconectarBluetooth();
+
 }  // namespace maquina_estados

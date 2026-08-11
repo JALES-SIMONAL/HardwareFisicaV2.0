@@ -170,10 +170,17 @@ bool iniciar(uint16_t totalRepeticoesSolicitadas) {
   // medição anterior antes do usuário salvá-la com nome — cenário real
   // quando uma queda de BLE deixa a medição anterior pendurada sem nome e o
   // app (ou o usuário, localmente) tenta começar de novo sem perceber.
+  // Fase::Executando entra na mesma guarda: agora que a tela de execução
+  // tem "Voltar" (sai sem cancelar, experimento continua em segundo plano —
+  // ver sairExperimentoExecucaoSemCancelar em maquina_estados.cpp), o
+  // usuário pode voltar ao menu de Experimentos com uma medição em
+  // andamento e escolher "Rodar experimento livre" de novo; sem esta
+  // guarda isso reiniciaria a medição em andamento do zero, perdendo o que
+  // já tinha sido coletado.
   portENTER_CRITICAL(&mux);
-  const bool pendenteDeNome = (fase == Fase::AguardandoNome);
+  const bool jaEmAndamento = (fase != Fase::Inativo);
   portEXIT_CRITICAL(&mux);
-  if (pendenteDeNome) return false;
+  if (jaEmAndamento) return false;
 
   uint16_t total = totalRepeticoesSolicitadas;
   if (total < 1) total = 1;

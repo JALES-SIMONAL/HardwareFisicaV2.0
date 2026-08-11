@@ -236,6 +236,9 @@ void processarLinha(char* linha) {
     cmd.tipo = comandos::CommandType::SetPassword;
     std::strncpy(cmd.texto, doc["senha_atual"] | "", sizeof(cmd.texto) - 1);
     std::strncpy(cmd.texto2, doc["nova_senha"] | "", sizeof(cmd.texto2) - 1);
+  } else if (std::strcmp(acao, "set_channel_test_active") == 0) {
+    cmd.tipo = comandos::CommandType::SetChannelTestActive;
+    cmd.valor = (doc["ativo"] | false) ? 1 : 0;
   } else {
     return;
   }
@@ -399,12 +402,14 @@ void loop() {
     publicarInfoDispositivo();
     publicarEstado();
     publicarConfiguracaoCanais();
+    maquina_estados::aoConectarBluetooth();
   } else if (!conectadoAgora && clienteConectadoAnterior) {
     Serial.println("[BT] Cliente desconectado");
     rxAccumLen = 0;
     LinhaComando descarte;
     while (xQueueReceive(filaComandosBt, &descarte, 0) == pdTRUE) {
     }
+    maquina_estados::aoDesconectarBluetooth();
   }
   clienteConectadoAnterior = conectadoAgora;
 

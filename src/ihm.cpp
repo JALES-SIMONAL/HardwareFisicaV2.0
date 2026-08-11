@@ -46,6 +46,30 @@ constexpr uint8_t BRILHO_NIVEL_MAXIMO = 30;
 // intensidade sem amplificador externo.
 constexpr uint16_t BUZZER_FREQUENCIA_HZ = 2000;
 
+// ---------------------------------------------------------------------
+// Indicação de conexão/desconexão BLE (ver iniciarIndicacaoConexao/
+// iniciarIndicacaoDesconexao/atualizarIndicacoes) — máquina de estados por
+// millis(), sem delay(): tick() roda em loop apertado (encoder, display,
+// Bluetooth) e travá-lo por 1.5s deixaria tudo isso sem resposta.
+enum class FaseIndicacaoBle : uint8_t {
+  Nenhuma,
+  ConexaoPisca1On,
+  ConexaoPisca1Off,
+  ConexaoPisca2On,
+  ConexaoPisca2Off,
+  DesconexaoOn,
+};
+
+FaseIndicacaoBle faseIndicacaoBle = FaseIndicacaoBle::Nenhuma;
+unsigned long inicioFaseIndicacaoMs = 0;
+
+// Dois ciclos on/off de 375ms = exatamente os 1.5s pedidos, terminando
+// apagado. Bipe curto (não o "beep()" padrão de 60ms — 80ms fica mais
+// perceptível junto com o pisca-pisca) a cada acendida.
+constexpr uint32_t DURACAO_FASE_PISCA_CONEXAO_MS = 375;
+constexpr uint32_t DURACAO_BEEP_CONEXAO_MS = 80;
+constexpr uint32_t DURACAO_FASE_PISCA_DESCONEXAO_MS = 400;
+
 struct EncoderState {
   int position = 0;
   int lastA = HIGH;
@@ -344,6 +368,63 @@ void controlarTodosLeds(uint8_t vermelho, uint8_t verde, uint8_t azul, uint8_t b
   }
   pixels.show();  // Uma única chamada, depois de definir todas as cores —
                    // garante que os LEDs acendam/mudem simultaneamente.
+}
+
+void iniciarIndicacaoConexao() {
+  faseIndicacaoBle = FaseIndicacaoBle::ConexaoPisca1On;
+  inicioFaseIndicacaoMs = millis();
+  controlarTodosLeds(0, 0, 255, LED_STARTUP_BRIGHTNESS);
+  beep(DURACAO_BEEP_CONEXAO_MS);
+}
+
+void iniciarIndicacaoDesconexao() {
+  faseIndicacaoBle = FaseIndicacaoBle::DesconexaoOn;
+  inicioFaseIndicacaoMs = millis();
+  controlarTodosLeds(255, 200, 0, LED_STARTUP_BRIGHTNESS);
+}
+
+void atualizarIndicacoes() {
+  if (faseIndicacaoBle == FaseIndicacaoBle::Nenhuma) return;
+
+  const unsigned long decorrido = millis() - inicioFaseIndicacaoMs;
+
+  switch (faseIndicacaoBle) {
+    case FaseIndicacaoBle::ConexaoPisca1On:
+      if (decorrido >= DURACAO_FASE_PISCA_CONEXAO_MS) {
+        controlarTodosLeds(0, 0, 0, 0);
+        faseIndicacaoBle = FaseIndicacaoBle::ConexaoPisca1Off;
+        inicioFaseIndicacaoMs = millis();
+      }
+      break;
+    case FaseIndicacaoBle::ConexaoPisca1Off:
+      if (decorrido >= DURACAO_FASE_PISCA_CONEXAO_MS) {
+        controlarTodosLeds(0, 0, 255, LED_STARTUP_BRIGHTNESS);
+        beep(DURACAO_BEEP_CONEXAO_MS);
+        faseIndicacaoBle = FaseIndicacaoBle::ConexaoPisca2On;
+        inicioFaseIndicacaoMs = millis();
+      }
+      break;
+    case FaseIndicacaoBle::ConexaoPisca2On:
+      if (decorrido >= DURACAO_FASE_PISCA_CONEXAO_MS) {
+        controlarTodosLeds(0, 0, 0, 0);
+        faseIndicacaoBle = FaseIndicacaoBle::ConexaoPisca2Off;
+        inicioFaseIndicacaoMs = millis();
+      }
+      break;
+    case FaseIndicacaoBle::ConexaoPisca2Off:
+      if (decorrido >= DURACAO_FASE_PISCA_CONEXAO_MS) {
+        faseIndicacaoBle = FaseIndicacaoBle::Nenhuma;
+      }
+      break;
+    case FaseIndicacaoBle::DesconexaoOn:
+      if (decorrido >= DURACAO_FASE_PISCA_DESCONEXAO_MS) {
+        controlarTodosLeds(0, 0, 0, 0);
+        faseIndicacaoBle = FaseIndicacaoBle::Nenhuma;
+      }
+      break;
+    case FaseIndicacaoBle::Nenhuma:
+      break;
+  }
 }
 
 void escreverTelaApp(const char* titulo, const char* valor, const char* rodape,

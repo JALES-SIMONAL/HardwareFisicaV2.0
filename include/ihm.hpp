@@ -61,6 +61,26 @@ void setVolume(uint8_t nivel);
 void beep(uint16_t duracaoMs = 60);
 
 // ---------------------------------------------------------------------
+// Indicação de conexão/desconexão BLE (NeoPixels + buzzer)
+// ---------------------------------------------------------------------
+
+// Inicia a animação de conexão BLE bem-sucedida: todos os NeoPixels piscam
+// em azul duas vezes + dois bipes curtos, tudo dentro de ~1.5s. Não-
+// bloqueante — só arma o estado; atualizarIndicacoes() precisa continuar
+// sendo chamada a cada tick() (já é, dentro de maquina_estados::tick())
+// para a animação progredir sem travar o resto do firmware (encoder, BLE,
+// display) durante o 1.5s.
+void iniciarIndicacaoConexao();
+
+// Inicia a indicação de queda de conexão BLE: todos os NeoPixels piscam em
+// amarelo uma única vez. Mesmo padrão não-bloqueante acima.
+void iniciarIndicacaoDesconexao();
+
+// Avança a animação em andamento (conexão ou desconexão), se houver —
+// barato/no-op quando nenhuma está pendente. Chamar a cada tick().
+void atualizarIndicacoes();
+
+// ---------------------------------------------------------------------
 // Primitivas gráficas reutilizáveis (coordenadas via layout.hpp)
 // ---------------------------------------------------------------------
 

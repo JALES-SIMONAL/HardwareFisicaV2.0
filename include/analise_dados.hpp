@@ -2,9 +2,9 @@
 
 #include <stdint.h>
 
-// Análise de um arquivo CSV já salvo: seleção de repetição, leitura de
-// eventos (em blocos, nunca o arquivo inteiro na RAM), diferença de tempo
-// entre dois eventos e cálculo de velocidade a partir de uma distância.
+// Análise de um arquivo CSV já salvo: seleção de repetição e leitura de
+// eventos (em blocos, nunca o arquivo inteiro na RAM) — a fonte de dados
+// comum a analise_linear e analise_circular.
 namespace analise_dados {
 
 constexpr uint8_t MAX_EVENTOS_REPETICAO = 40;
@@ -29,12 +29,5 @@ uint16_t contarRepeticoes(const char* nomeComExtensao);
 
 uint8_t quantidadeEventosCarregados();
 const EventoLido& evento(uint8_t indice);
-
-// delta_t_us = tempo(final) - tempo(inicial). false se os índices forem
-// inválidos ou o intervalo não for positivo (dados incompletos/fora de ordem).
-bool calcularIntervalo(uint8_t indiceInicial, uint8_t indiceFinal, int64_t& deltaTUsSaida);
-
-// velocidade = distanciaMetros / (deltaTUs / 1e6). false se deltaTUs <= 0.
-bool calcularVelocidade(int64_t deltaTUs, float distanciaMetros, float& velocidadeMsSaida);
 
 }  // namespace analise_dados

@@ -5,7 +5,6 @@
 #include <Arduino.h>
 
 #include "MAIN.HPP"
-#include "analise_dados.hpp"
 #include "canais.hpp"
 #include "comandos.hpp"
 #include "configuracoes.hpp"
@@ -114,26 +113,6 @@ void testarConfiguracaoCanais() {
 }
 
 // ---------------------------------------------------------------------
-// analise_dados: cálculo de intervalo/velocidade (Fase 32, itens 10-11)
-// ---------------------------------------------------------------------
-void testarAnaliseDados() {
-  float velocidade = 0.0f;
-
-  // deltaTUs positivo: 2s para percorrer 1m => 0.5 m/s.
-  checar(analise_dados::calcularVelocidade(2000000, 1.0f, velocidade) == true,
-         "calcularVelocidade: aceita intervalo positivo");
-  checar(velocidade > 0.499f && velocidade < 0.501f,
-         "calcularVelocidade: 1m em 2s = 0.5 m/s");
-
-  // deltaTUs zero ou negativo: nunca calcula (evita divisao por zero /
-  // resultado sem sentido fisico).
-  checar(analise_dados::calcularVelocidade(0, 1.0f, velocidade) == false,
-         "calcularVelocidade: rejeita intervalo zero");
-  checar(analise_dados::calcularVelocidade(-100, 1.0f, velocidade) == false,
-         "calcularVelocidade: rejeita intervalo negativo");
-}
-
-// ---------------------------------------------------------------------
 // Conversão de estado digital para 'H'/'L' usada no CSV (Fase 32, item 12).
 // A conversão real é um único operador ternário embutido em
 // experimentos.cpp (novoEstado ? 'H' : 'L'); replicado aqui para garantir
@@ -180,7 +159,6 @@ void executar() {
   Serial.println("[AUTOTESTE] ===== Iniciando autotestes internos =====");
   testarFiltroBordas();
   testarConfiguracaoCanais();
-  testarAnaliseDados();
   testarConversaoEstado();
   testarLimites();
   Serial.printf("[AUTOTESTE] ===== Resultado: %u/%u passaram (%u falha(s)) =====\n",

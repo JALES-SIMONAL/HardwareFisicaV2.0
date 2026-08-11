@@ -57,7 +57,6 @@ void definirNomeDispositivo(const char* novoNome);
 void publicarEstado();
 void publicarEvento(uint8_t canal1based, char estado, int64_t tempoRelativoUs);
 void publicarConfiguracaoCanais();
-void publicarResultadoAnalise(int64_t deltaTUs, float velocidadeMs);
 
 // Publicada uma única vez, logo que um app conecta (dados estáticos do
 // equipamento: nome, versão, autor, MAC, device id, URL do manual) —

@@ -88,23 +88,4 @@ const EventoLido& evento(uint8_t indice) {
   return eventosCarregados[indice];
 }
 
-bool calcularIntervalo(uint8_t indiceInicial, uint8_t indiceFinal, int64_t& deltaTUsSaida) {
-  if (indiceInicial >= quantidadeCarregada || indiceFinal >= quantidadeCarregada) return false;
-
-  const int64_t tInicial = eventosCarregados[indiceInicial].tempoUs;
-  const int64_t tFinal = eventosCarregados[indiceFinal].tempoUs;
-  if (tFinal <= tInicial) return false;
-
-  deltaTUsSaida = tFinal - tInicial;
-  return true;
-}
-
-bool calcularVelocidade(int64_t deltaTUs, float distanciaMetros, float& velocidadeMsSaida) {
-  if (deltaTUs <= 0) return false;
-
-  const float deltaTS = static_cast<float>(deltaTUs) / 1000000.0f;
-  velocidadeMsSaida = distanciaMetros / deltaTS;
-  return true;
-}
-
 }  // namespace analise_dados

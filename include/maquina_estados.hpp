@@ -48,9 +48,11 @@ enum class Tela : uint8_t {
 
   AnaliseSelecionarArquivo,
   AnaliseTipo,
-  AnaliseEventos,
-  AnaliseDistancia,
-  AnaliseResultado,
+
+  AnaliseLinearDistancia,
+  AnaliseLinearResultado,
+  AnaliseLinearEscolherRepeticao,
+  AnaliseLinearGrafico,
 
   AnaliseCircularRaioVaos,
   AnaliseCircularResultado,

@@ -9,6 +9,7 @@
 #include "MAIN.HPP"
 #include "analise_circular.hpp"
 #include "analise_dados.hpp"
+#include "analise_linear.hpp"
 #include "aquisicao.hpp"
 #include "armazenamento.hpp"
 #include "bluetooth_app.hpp"
@@ -365,9 +366,18 @@ void carregarDadosArquivo(const char* nomeComExtensao) {
 }
 
 char arquivoAnaliseNome[TAMANHO_MAX_NOME_ARQUIVO + 5] = "";
-int16_t indiceEventoInicialAnalise = -1;
-int64_t deltaTAnaliseUs = 0;
-float velocidadeAnaliseMs = 0.0f;
+
+// Distância entre dois pontos/sensores consecutivos do trilho, preservada
+// entre visitas à tela (mesmo padrão de analiseCircularRaioMm abaixo) e
+// usada para acionar analise_linear::calcular().
+int32_t analiseLinearDistanciaCm = 100;
+// 0 = gráfico de velocidade, 1 = gráfico de aceleração — ver
+// PAGINA_GRAFICO_LINEAR_* perto de tratarAnaliseLinearResultado().
+uint8_t analiseLinearPaginaGrafico = 0;
+// Mesmo papel de analiseCircularTotalRepeticoes/RepeticoesValidas, mas para
+// a análise linear (ver comentário lá).
+uint16_t analiseLinearTotalRepeticoes = 0;
+uint16_t analiseLinearRepeticoesValidas = 0;
 
 // Parâmetros da análise de movimento circular, preservados entre as telas
 // de raio/vãos (cada uma edita e devolve um valor via edicaoValor, que é
@@ -518,9 +528,10 @@ const char* nomeTela(Tela tela) {
     case Tela::ConexaoAppRenomear: return "Renomear dispositivo BT";
     case Tela::AnaliseSelecionarArquivo: return "Selecionar arquivo";
     case Tela::AnaliseTipo: return "Tipo de analise";
-    case Tela::AnaliseEventos: return "Eventos";
-    case Tela::AnaliseDistancia: return "Distancia";
-    case Tela::AnaliseResultado: return "Resultado";
+    case Tela::AnaliseLinearDistancia: return "Distancia entre pontos";
+    case Tela::AnaliseLinearResultado: return "Resultado linear";
+    case Tela::AnaliseLinearEscolherRepeticao: return "Qual repeticao?";
+    case Tela::AnaliseLinearGrafico: return "Grafico";
     case Tela::AnaliseCircularRaioVaos: return "Raio e vaos";
     case Tela::AnaliseCircularResultado: return "Resultado circular";
     case Tela::AnaliseCircularEscolherRepeticao: return "Qual repeticao?";
@@ -1004,7 +1015,6 @@ void tratarAnaliseSelecionarArquivo(const Command& cmd) {
         // 0..999 sem o usuário saber quantas repetições o arquivo tem) foi
         // removida por não ter função real nesse fluxo local.
         if (analise_dados::carregarRepeticao(arquivoAnaliseNome, 0) > 0) {
-          indiceEventoInicialAnalise = -1;
           navegarPara(Tela::AnaliseTipo);
         } else {
           ihm::beep(150);
@@ -1017,12 +1027,12 @@ void tratarAnaliseSelecionarArquivo(const Command& cmd) {
 }
 
 // Escolha do tipo de análise para a repetição já carregada: 0 = análise
-// linear (fluxo existente: dois eventos + distância -> velocidade), 1 =
-// movimento circular (raio + vãos -> distância + gráficos de
-// velocidade/aceleração), 2 = voltar. Sem o item "Voltar" (e sem tratar
-// CommandType::Back) esta tela era um beco sem saída no encoder local: ele
-// só gera Next/Previous/Confirm (ver tick()), nunca Back — Back só existe
-// vindo do app Bluetooth.
+// linear (trilho reto: distância fixa entre pontos -> distância percorrida
+// + gráficos de velocidade/aceleração), 1 = movimento circular (raio +
+// vãos -> distância + gráficos de velocidade/aceleração/RPM), 2 = voltar.
+// Sem o item "Voltar" (e sem tratar CommandType::Back) esta tela era um
+// beco sem saída no encoder local: ele só gera Next/Previous/Confirm (ver
+// tick()), nunca Back — Back só existe vindo do app Bluetooth.
 constexpr uint8_t QTD_ANALISE_TIPO = 3;
 constexpr uint8_t ITEM_ANALISE_TIPO_VOLTAR = 2;
 
@@ -1039,14 +1049,162 @@ void tratarAnaliseTipo(const Command& cmd) {
       break;
     case CommandType::Confirm:
       if (estado.indiceSelecionado == 0) {
-        indiceEventoInicialAnalise = -1;
-        navegarPara(Tela::AnaliseEventos);
+        navegarPara(Tela::AnaliseLinearDistancia);
       } else if (estado.indiceSelecionado == 1) {
         navegarPara(Tela::AnaliseCircularRaioVaos);
       } else if (estado.indiceSelecionado == ITEM_ANALISE_TIPO_VOLTAR) {
         voltarUmNivel();
       }
       break;
+    case CommandType::Back:
+      voltarUmNivel();
+      break;
+    default:
+      break;
+  }
+}
+
+constexpr int32_t ANALISE_LINEAR_DISTANCIA_MIN_CM = 1;
+constexpr int32_t ANALISE_LINEAR_DISTANCIA_MAX_CM = 2000;
+
+// Seletor "Distancia: N cm / Voltar" — mesmo padrão de
+// tratarSeletorValorComVoltar/redesenharValorComVoltar usado por
+// Brilho/Volume/Repetições do experimento: só uma grandeza aqui (distância
+// entre dois pontos/sensores consecutivos do trilho, igual entre todos os
+// intervalos), então não precisa da lista customizada que Raio/Vaos usa
+// (essa tem duas grandezas).
+void tratarAnaliseLinearDistancia(const Command& cmd) {
+  if (!edicaoValor.emEdicao) {
+    tratarSeletorValorComVoltar(cmd, analiseLinearDistanciaCm);
+    return;
+  }
+
+  switch (cmd.tipo) {
+    case CommandType::Next:
+      if (edicaoValor.valorTemp < ANALISE_LINEAR_DISTANCIA_MAX_CM) edicaoValor.valorTemp++;
+      precisaRedesenhar = true;
+      break;
+    case CommandType::Previous:
+      if (edicaoValor.valorTemp > ANALISE_LINEAR_DISTANCIA_MIN_CM) edicaoValor.valorTemp--;
+      precisaRedesenhar = true;
+      break;
+    case CommandType::Confirm: {
+      analiseLinearDistanciaCm = edicaoValor.valorTemp;
+      const float distanciaMetros = static_cast<float>(analiseLinearDistanciaCm) / 100.0f;
+      // Os valores-resumo mostrados no resultado são a média entre TODAS
+      // as repetições do arquivo (mesmo raciocínio de
+      // tratarAnaliseCircularRaioVaos()) — cada repetição pesa igual,
+      // independente de quantos eventos teve.
+      analiseLinearTotalRepeticoes = analise_dados::contarRepeticoes(arquivoAnaliseNome);
+      if (analiseLinearTotalRepeticoes > MAX_REPETICOES) {
+        analiseLinearTotalRepeticoes = MAX_REPETICOES;
+      }
+      analiseLinearRepeticoesValidas = analise_linear::calcularMediaRepeticoes(
+          arquivoAnaliseNome, analiseLinearTotalRepeticoes, distanciaMetros);
+      navegarPara(Tela::AnaliseLinearResultado);
+      break;
+    }
+    case CommandType::Back:
+      edicaoValor.emEdicao = false;
+      precisaRedesenhar = true;
+      break;
+    default:
+      break;
+  }
+}
+
+// Itens da lista da tela de resultado (ver redesenharAnaliseLinearResultado()):
+// os quatro primeiros (distancia, repeticoes, vel. media, acel. media —
+// média entre TODAS as repetições do arquivo) são só informativos —
+// Confirm neles não faz nada, mesmo padrão de
+// tratarArquivoDados()/tratarConfigCanaisVisualizar(); os dois gráficos são
+// opções separadas; cada uma abre Tela::AnaliseLinearEscolherRepeticao
+// antes de plotar, pra perguntar de qual repetição (ou da média entre
+// elas) vem a curva. "Voltar" fecha a análise.
+constexpr uint8_t QTD_ANALISE_LINEAR_RESULTADO = 7;
+constexpr uint8_t ITEM_LINEAR_RESULTADO_GRAFICO_VELOCIDADE = 4;
+constexpr uint8_t ITEM_LINEAR_RESULTADO_GRAFICO_ACELERACAO = 5;
+constexpr uint8_t ITEM_LINEAR_RESULTADO_VOLTAR = 6;
+
+// Páginas de ihm::desenharGrafico() na tela Tela::AnaliseLinearGrafico.
+constexpr uint8_t PAGINA_GRAFICO_LINEAR_VELOCIDADE = 0;
+constexpr uint8_t PAGINA_GRAFICO_LINEAR_ACELERACAO = 1;
+
+void tratarAnaliseLinearResultado(const Command& cmd) {
+  switch (cmd.tipo) {
+    case CommandType::Next:
+      estado.indiceSelecionado = (estado.indiceSelecionado + 1) % QTD_ANALISE_LINEAR_RESULTADO;
+      precisaRedesenhar = true;
+      break;
+    case CommandType::Previous:
+      estado.indiceSelecionado = (estado.indiceSelecionado == 0)
+                                      ? (QTD_ANALISE_LINEAR_RESULTADO - 1)
+                                      : (estado.indiceSelecionado - 1);
+      precisaRedesenhar = true;
+      break;
+    case CommandType::Confirm:
+      if (estado.indiceSelecionado == ITEM_LINEAR_RESULTADO_GRAFICO_VELOCIDADE) {
+        analiseLinearPaginaGrafico = PAGINA_GRAFICO_LINEAR_VELOCIDADE;
+        navegarPara(Tela::AnaliseLinearEscolherRepeticao);
+      } else if (estado.indiceSelecionado == ITEM_LINEAR_RESULTADO_GRAFICO_ACELERACAO) {
+        analiseLinearPaginaGrafico = PAGINA_GRAFICO_LINEAR_ACELERACAO;
+        navegarPara(Tela::AnaliseLinearEscolherRepeticao);
+      } else if (estado.indiceSelecionado == ITEM_LINEAR_RESULTADO_VOLTAR) {
+        voltarUmNivel();
+      }
+      break;
+    case CommandType::Back:
+      voltarUmNivel();
+      break;
+    default:
+      break;
+  }
+}
+
+// Escolha de qual repetição vira o gráfico (analiseLinearPaginaGrafico já
+// foi escolhido em tratarAnaliseLinearResultado()): itens 0..N-1 = "Rep
+// 1".."Rep N", item N = "Media" (analise_linear::calcularMediaGrafico()),
+// item N+1 = "Voltar". Mesmo design de tratarAnaliseCircularEscolherRepeticao().
+void tratarAnaliseLinearEscolherRepeticao(const Command& cmd) {
+  const uint16_t qtd = analiseLinearTotalRepeticoes + 2;
+  const uint16_t itemMedia = analiseLinearTotalRepeticoes;
+  const uint16_t itemVoltar = analiseLinearTotalRepeticoes + 1;
+
+  switch (cmd.tipo) {
+    case CommandType::Next:
+      estado.indiceSelecionado = (estado.indiceSelecionado + 1) % qtd;
+      precisaRedesenhar = true;
+      break;
+    case CommandType::Previous:
+      estado.indiceSelecionado = (estado.indiceSelecionado == 0) ? (qtd - 1) : (estado.indiceSelecionado - 1);
+      precisaRedesenhar = true;
+      break;
+    case CommandType::Confirm: {
+      const float distanciaMetros = static_cast<float>(analiseLinearDistanciaCm) / 100.0f;
+      if (estado.indiceSelecionado == itemMedia) {
+        analise_linear::calcularMediaGrafico(arquivoAnaliseNome, analiseLinearTotalRepeticoes,
+                                              distanciaMetros);
+        navegarPara(Tela::AnaliseLinearGrafico);
+      } else if (estado.indiceSelecionado == itemVoltar) {
+        voltarUmNivel();
+      } else {
+        analise_dados::carregarRepeticao(arquivoAnaliseNome, estado.indiceSelecionado);
+        analise_linear::calcular(distanciaMetros);
+        navegarPara(Tela::AnaliseLinearGrafico);
+      }
+      break;
+    }
+    case CommandType::Back:
+      voltarUmNivel();
+      break;
+    default:
+      break;
+  }
+}
+
+void tratarAnaliseLinearGrafico(const Command& cmd) {
+  switch (cmd.tipo) {
+    case CommandType::Confirm:
     case CommandType::Back:
       voltarUmNivel();
       break;
@@ -1259,87 +1417,6 @@ void tratarAnaliseCircularGrafico(const Command& cmd) {
     case CommandType::Confirm:
     case CommandType::Back:
       voltarUmNivel();
-      break;
-    default:
-      break;
-  }
-}
-
-void tratarAnaliseEventos(const Command& cmd) {
-  const uint8_t qtdEventos = analise_dados::quantidadeEventosCarregados();
-  const uint16_t qtd = static_cast<uint16_t>(qtdEventos) + 1;
-
-  switch (cmd.tipo) {
-    case CommandType::Next:
-      estado.indiceSelecionado = (estado.indiceSelecionado + 1) % qtd;
-      precisaRedesenhar = true;
-      break;
-    case CommandType::Previous:
-      estado.indiceSelecionado = (estado.indiceSelecionado == 0) ? qtd - 1 : estado.indiceSelecionado - 1;
-      precisaRedesenhar = true;
-      break;
-    case CommandType::Confirm:
-      if (estado.indiceSelecionado == qtdEventos) {
-        indiceEventoInicialAnalise = -1;
-        voltarUmNivel();
-        break;
-      }
-      if (indiceEventoInicialAnalise < 0) {
-        indiceEventoInicialAnalise = static_cast<int16_t>(estado.indiceSelecionado);
-        precisaRedesenhar = true;
-      } else {
-        int64_t delta = 0;
-        if (analise_dados::calcularIntervalo(static_cast<uint8_t>(indiceEventoInicialAnalise),
-                                              static_cast<uint8_t>(estado.indiceSelecionado), delta)) {
-          deltaTAnaliseUs = delta;
-          indiceEventoInicialAnalise = -1;
-          navegarPara(Tela::AnaliseDistancia);
-          edicaoValor.valorTemp = 100;
-        } else {
-          ihm::beep(150);
-          indiceEventoInicialAnalise = -1;
-          precisaRedesenhar = true;
-        }
-      }
-      break;
-    default:
-      break;
-  }
-}
-
-void tratarAnaliseDistancia(const Command& cmd) {
-  constexpr int32_t DISTANCIA_MIN_CM = 1;
-  constexpr int32_t DISTANCIA_MAX_CM = 2000;
-
-  // Seletor "Distancia: N cm / Voltar" — mesma correção das outras duas
-  // telas de valor único (ver tratarExperimentoRepeticoes).
-  if (!edicaoValor.emEdicao) {
-    tratarSeletorValorComVoltar(cmd, edicaoValor.valorTemp);
-    return;
-  }
-
-  switch (cmd.tipo) {
-    case CommandType::Next:
-      if (edicaoValor.valorTemp < DISTANCIA_MAX_CM) edicaoValor.valorTemp++;
-      precisaRedesenhar = true;
-      break;
-    case CommandType::Previous:
-      if (edicaoValor.valorTemp > DISTANCIA_MIN_CM) edicaoValor.valorTemp--;
-      precisaRedesenhar = true;
-      break;
-    case CommandType::Confirm: {
-      const float distanciaMetros = static_cast<float>(edicaoValor.valorTemp) / 100.0f;
-      if (analise_dados::calcularVelocidade(deltaTAnaliseUs, distanciaMetros, velocidadeAnaliseMs)) {
-        bluetooth_app::publicarResultadoAnalise(deltaTAnaliseUs, velocidadeAnaliseMs);
-      } else {
-        velocidadeAnaliseMs = 0.0f;
-      }
-      navegarPara(Tela::AnaliseResultado);
-      break;
-    }
-    case CommandType::Back:
-      edicaoValor.emEdicao = false;
-      precisaRedesenhar = true;
       break;
     default:
       break;
@@ -1987,29 +2064,54 @@ void redesenharAnaliseSelecionarArquivo() {
                           estado.indiceSelecionado, estado.offsetRolagem);
 }
 
-void redesenharAnaliseEventos() {
-  const uint8_t qtd = analise_dados::quantidadeEventosCarregados();
-  char buffers[analise_dados::MAX_EVENTOS_REPETICAO][28];
-  const char* itens[analise_dados::MAX_EVENTOS_REPETICAO + 1];
+void redesenharAnaliseLinearResultado() {
+  char itemDistancia[32];
+  char itemRepeticoes[32];
+  char itemVelocidade[32];
+  char itemAceleracao[32];
+  // Valores-resumo são a média entre todas as repetições do arquivo (ver
+  // analise_linear::calcularMediaRepeticoes(), chamada em
+  // tratarAnaliseLinearDistancia()).
+  snprintf(itemDistancia, sizeof(itemDistancia), "Distancia: %.3fm",
+           static_cast<double>(analise_linear::distanciaMediaRepeticoesMetros()));
+  snprintf(itemRepeticoes, sizeof(itemRepeticoes), "Repeticoes: %u/%u",
+           static_cast<unsigned>(analiseLinearRepeticoesValidas),
+           static_cast<unsigned>(analiseLinearTotalRepeticoes));
+  snprintf(itemVelocidade, sizeof(itemVelocidade), "Vel. media: %.2fm/s",
+           static_cast<double>(analise_linear::velocidadeMediaRepeticoesMs()));
+  snprintf(itemAceleracao, sizeof(itemAceleracao), "Acel. media: %.2fm/s2",
+           static_cast<double>(analise_linear::aceleracaoMediaRepeticoesMs2()));
 
-  for (uint8_t i = 0; i < qtd; i++) {
-    const analise_dados::EventoLido& ev = analise_dados::evento(i);
-    const char marcador = (i == indiceEventoInicialAnalise) ? '*' : ' ';
-    snprintf(buffers[i], sizeof(buffers[i]), "%cE%u C%u %c %lldus", marcador, static_cast<unsigned>(i),
-             static_cast<unsigned>(ev.canal), ev.estado, static_cast<long long>(ev.tempoUs));
+  const char* itens[QTD_ANALISE_LINEAR_RESULTADO] = {
+      itemDistancia, itemRepeticoes, itemVelocidade, itemAceleracao, "Ver grafico veloc.",
+      "Ver grafico acel.", "Voltar"};
+
+  ihm::desenharListaMenu("Resultado", itens, QTD_ANALISE_LINEAR_RESULTADO, estado.indiceSelecionado,
+                          estado.offsetRolagem);
+}
+
+void redesenharAnaliseLinearEscolherRepeticao() {
+  char buffers[MAX_REPETICOES][10];
+  const char* itens[MAX_REPETICOES + 2];
+  for (uint16_t i = 0; i < analiseLinearTotalRepeticoes; i++) {
+    snprintf(buffers[i], sizeof(buffers[i]), "Rep %u", static_cast<unsigned>(i + 1));
     itens[i] = buffers[i];
   }
-  itens[qtd] = "Voltar";
+  itens[analiseLinearTotalRepeticoes] = "Media";
+  itens[analiseLinearTotalRepeticoes + 1] = "Voltar";
 
-  ihm::desenharListaMenu("Selecionar eventos", itens, static_cast<uint8_t>(qtd + 1),
+  ihm::desenharListaMenu("Qual repeticao?", itens, static_cast<uint8_t>(analiseLinearTotalRepeticoes + 2),
                           estado.indiceSelecionado, estado.offsetRolagem);
 }
 
-void redesenharAnaliseResultado() {
-  char mensagem[48];
-  snprintf(mensagem, sizeof(mensagem), "dt=%.3fs v=%.3fm/s",
-           static_cast<double>(deltaTAnaliseUs) / 1000000.0, static_cast<double>(velocidadeAnaliseMs));
-  ihm::desenharMensagem("Resultado", mensagem);
+void redesenharAnaliseLinearGrafico() {
+  if (analiseLinearPaginaGrafico == PAGINA_GRAFICO_LINEAR_VELOCIDADE) {
+    ihm::desenharGrafico("Velocidade (m/s)", analise_linear::temposVelocidadeS(),
+                          analise_linear::velocidadesMs(), analise_linear::quantidadeVelocidades());
+  } else {
+    ihm::desenharGrafico("Aceleracao (m/s2)", analise_linear::temposAceleracaoS(),
+                          analise_linear::aceleracoesMs2(), analise_linear::quantidadeAceleracoes());
+  }
 }
 
 void redesenharAnaliseTipo() {
@@ -2270,14 +2372,18 @@ void redesenharTelaAtual() {
     case Tela::AnaliseTipo:
       redesenharAnaliseTipo();
       break;
-    case Tela::AnaliseEventos:
-      redesenharAnaliseEventos();
+    case Tela::AnaliseLinearDistancia:
+      redesenharValorComVoltar("Distancia", analiseLinearDistanciaCm, ANALISE_LINEAR_DISTANCIA_MIN_CM,
+                                ANALISE_LINEAR_DISTANCIA_MAX_CM, "cm");
       break;
-    case Tela::AnaliseDistancia:
-      redesenharValorComVoltar("Distancia", edicaoValor.valorTemp, 1, 2000, "cm");
+    case Tela::AnaliseLinearResultado:
+      redesenharAnaliseLinearResultado();
       break;
-    case Tela::AnaliseResultado:
-      redesenharAnaliseResultado();
+    case Tela::AnaliseLinearEscolherRepeticao:
+      redesenharAnaliseLinearEscolherRepeticao();
+      break;
+    case Tela::AnaliseLinearGrafico:
+      redesenharAnaliseLinearGrafico();
       break;
     case Tela::AnaliseCircularRaioVaos:
       redesenharAnaliseCircularRaioVaos();
@@ -2642,11 +2748,17 @@ void processarComando(const Command& cmd, Origem /*origem*/) {
     case Tela::AnaliseTipo:
       tratarAnaliseTipo(cmd);
       break;
-    case Tela::AnaliseEventos:
-      tratarAnaliseEventos(cmd);
+    case Tela::AnaliseLinearDistancia:
+      tratarAnaliseLinearDistancia(cmd);
       break;
-    case Tela::AnaliseDistancia:
-      tratarAnaliseDistancia(cmd);
+    case Tela::AnaliseLinearResultado:
+      tratarAnaliseLinearResultado(cmd);
+      break;
+    case Tela::AnaliseLinearEscolherRepeticao:
+      tratarAnaliseLinearEscolherRepeticao(cmd);
+      break;
+    case Tela::AnaliseLinearGrafico:
+      tratarAnaliseLinearGrafico(cmd);
       break;
     case Tela::AnaliseCircularRaioVaos:
       tratarAnaliseCircularRaioVaos(cmd);

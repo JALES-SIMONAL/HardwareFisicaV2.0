@@ -609,21 +609,6 @@ void publicarConfiguracaoCanais() {
   enviarLinha(payload, tamanho);
 }
 
-void publicarResultadoAnalise(int64_t deltaTUs, float velocidadeMs) {
-  TravaBt trava;
-  if (!clienteConectado) return;
-
-  JsonDocument doc;
-  doc["topico"] = "event";
-  doc["tipo"] = "analise";
-  doc["delta_t_us"] = static_cast<long long>(deltaTUs);
-  doc["velocidade_ms"] = velocidadeMs;
-
-  char payload[96];
-  const size_t tamanho = serializeJson(doc, payload, sizeof(payload));
-  enviarLinha(payload, tamanho);
-}
-
 void reconectar() {
   TravaBt trava;
   if (clienteConectado && pServidor != nullptr) {

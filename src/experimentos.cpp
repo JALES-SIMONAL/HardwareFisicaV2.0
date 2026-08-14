@@ -222,7 +222,18 @@ void finalizarRepeticaoAtual() {
   armazenamento::enfileirarLinhaEmBranco();
 
   if (repAtual >= repTotal) {
-    armazenamento::fecharArquivoAtual();
+    // Assíncrono de propósito (ver comentário grande em
+    // armazenamento::solicitarFechamentoArquivo()): esta função roda no
+    // núcleo 1 (IHM/Bluetooth) — chamar a versão bloqueante
+    // (fecharArquivoAtual()) aqui podia travar a tela/encoder/BLE inteiros
+    // por tempo indeterminado sempre que o núcleo 0 estivesse no meio de
+    // uma escrita lenta no cartão SD, exatamente o bug de "trava ao
+    // finalizar repetição" relatado. O fechamento de verdade acontece no
+    // núcleo 0 em até ~1ms; salvarComoArquivoFinal() só pode ser chamada
+    // depois que o usuário digitar um nome (no mínimo alguns segundos,
+    // local ou via BLE), tempo de sobra para o fechamento assíncrono
+    // terminar antes do rename.
+    armazenamento::solicitarFechamentoArquivo();
     portENTER_CRITICAL(&mux);
     fase = Fase::AguardandoNome;
     portEXIT_CRITICAL(&mux);
@@ -256,10 +267,16 @@ void reiniciarRepeticaoAtual() {
 }
 
 void cancelar() {
-  armazenamento::fecharArquivoAtual();
+  // Mesmo motivo do fechamento assíncrono em finalizarRepeticaoAtual():
+  // também roda no núcleo 1, também não pode ficar bloqueada esperando o
+  // SD. armazenamento::solicitarFechamentoEExclusao() só fecha e exclui o
+  // arquivo de trabalho quando o núcleo 0 chegar nele (~1ms depois) — o
+  // usuário já vê a tela de Experimentos de volta antes disso, mas isso é
+  // só uma limpeza de fundo, não algo que o usuário precise esperar ver
+  // concluído.
   char nomeComExtensao[24];
   snprintf(nomeComExtensao, sizeof(nomeComExtensao), "%s.csv", NOME_ARQUIVO_TRABALHO);
-  armazenamento::excluirArquivo(nomeComExtensao);
+  armazenamento::solicitarFechamentoEExclusao(nomeComExtensao);
 
   portENTER_CRITICAL(&mux);
   fase = Fase::Inativo;

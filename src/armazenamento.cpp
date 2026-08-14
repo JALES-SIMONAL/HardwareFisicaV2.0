@@ -35,6 +35,16 @@ uint32_t erros = 0;
 char bufferFlush[STORAGE_FLUSH_THRESHOLD][24];
 uint16_t linhasNoBuffer = 0;
 
+// Pedido de fechamento assíncrono (ver solicitarFechamentoArquivo() /
+// solicitarFechamentoEExclusao()) — só escritos/lidos como bool simples de
+// 1 byte, sem mutex dedicado: o pior caso de corrida entre núcleos aqui é
+// processarFila() ver o pedido um tick (~1ms) depois do esperado, nunca
+// corrompe estado. O nome a excluir é escrito ANTES da flag correspondente
+// (ordem importa: processarFila() só olha o nome depois de ver a flag).
+volatile bool fechamentoPendente = false;
+volatile bool exclusaoAposFechamentoPendente = false;
+char nomeExclusaoAposFechamento[32] = "";
+
 File arquivoLeitura;
 bool leituraAberta = false;
 
@@ -313,6 +323,27 @@ void processarFila() {
 
     if (!processouAlgo) break;
   }
+
+  // Atende um pedido de fechamento assíncrono (núcleo 1, ver
+  // solicitarFechamentoArquivo()) DEPOIS de esvaziar a fila acima — mesma
+  // ordem que fecharArquivoAtualInterno() já impõe internamente, só que
+  // aqui quem bloqueia é esta própria tarefa (núcleo 0), nunca a de IHM/
+  // Bluetooth. É seguro fazer isto a cada volta do loop() de
+  // tarefaAquisicaoArmazenamento (chamada a cada ~1ms): sem pedido
+  // pendente, os dois "if" abaixo são só leituras de bool.
+  if (fechamentoPendente) {
+    fechamentoPendente = false;
+    {
+      TravaBarramentoSD travaBus;
+      xSemaphoreTake(mutexArquivo, portMAX_DELAY);
+      fecharArquivoAtualInterno();
+      xSemaphoreGive(mutexArquivo);
+    }
+    if (exclusaoAposFechamentoPendente) {
+      exclusaoAposFechamentoPendente = false;
+      excluirArquivo(nomeExclusaoAposFechamento);
+    }
+  }
 }
 
 void fecharArquivoAtual() {
@@ -320,6 +351,16 @@ void fecharArquivoAtual() {
   xSemaphoreTake(mutexArquivo, portMAX_DELAY);
   fecharArquivoAtualInterno();
   xSemaphoreGive(mutexArquivo);
+}
+
+void solicitarFechamentoArquivo() { fechamentoPendente = true; }
+
+void solicitarFechamentoEExclusao(const char* nomeComExtensao) {
+  std::strncpy(nomeExclusaoAposFechamento, nomeComExtensao,
+               sizeof(nomeExclusaoAposFechamento) - 1);
+  nomeExclusaoAposFechamento[sizeof(nomeExclusaoAposFechamento) - 1] = '\0';
+  exclusaoAposFechamentoPendente = true;
+  fechamentoPendente = true;
 }
 
 namespace {

@@ -30,8 +30,28 @@ void enfileirarLinhaEmBranco();
 // periodicamente pela tarefa de armazenamento (core 0).
 void processarFila();
 
-// Descarrega o que houver no buffer e fecha o arquivo atual.
+// Descarrega o que houver no buffer e fecha o arquivo atual — BLOQUEIA
+// (portMAX_DELAY) até conseguir os locks do arquivo/barramento SPI. Só
+// deve ser chamada de dentro da própria tarefa de armazenamento (núcleo 0,
+// via processarFila()) ou em pontos onde bloquear é aceitável (ex.: boot).
+// Chamar isto do núcleo 1 (IHM/Bluetooth) pode travar a tela/encoder/BLE
+// inteiros se o núcleo 0 estiver no meio de uma escrita lenta no SD —
+// use solicitarFechamentoArquivo()/solicitarFechamentoEExclusao() nesse
+// caso.
 void fecharArquivoAtual();
+
+// Pede o fechamento do arquivo atual em segundo plano — NÃO bloqueia quem
+// chama. O fechamento de fato acontece dentro de processarFila() (núcleo
+// 0), na próxima vez que ela rodar (dentro de ~1ms). Use isto em vez de
+// fecharArquivoAtual() sempre que quem chama roda no núcleo 1 (IHM/
+// Bluetooth) e não pode ficar bloqueado esperando o SD.
+void solicitarFechamentoArquivo();
+
+// Mesmo que solicitarFechamentoArquivo(), mas também exclui
+// "nomeComExtensao" logo depois que o fechamento terminar (usado ao
+// cancelar um experimento: precisa fechar o arquivo de trabalho antes de
+// poder excluí-lo).
+void solicitarFechamentoEExclusao(const char* nomeComExtensao);
 
 struct InfoArquivo {
   // 25 = 20 (TAMANHO_MAX_NOME_ARQUIVO, o maior nome digitável no editor de

@@ -317,6 +317,52 @@ void limparFaixa(int16_t y, int16_t altura) {
   tft.fillRect(0, y, tft.width(), altura, COR_FUNDO);
 }
 
+// ---------------------------------------------------------------------
+// Redesenho em PASSAGEM ÚNICA (o que eliminou o "piscado" entre telas)
+// ---------------------------------------------------------------------
+// Antes, cada tela começava com fillScreen(preto) e só então desenhava por
+// cima. Isso escreve os MESMOS pixels duas vezes: primeiro tudo preto,
+// depois o conteúdo. A 10MHz a tela cheia leva ~123ms, então o usuário via
+// literalmente a tela apagar e reaparecer — daí a sensação de piscar, que
+// não era flicker de refresh e sim o preto intermediário sendo exibido.
+//
+// Agora nenhuma tela apaga nada antes: cada elemento é desenhado já com o
+// seu próprio fundo, por cima do que estava ali, e no fim apaga-se apenas a
+// SOBRA — a faixa que o conteúdo novo não cobriu (uma lista mais curta que
+// a anterior, por exemplo). Cada pixel é escrito uma vez só, na cor final:
+// metade do tempo e sem estado intermediário visível.
+//
+// A consequência para quem escreve tela nova: todo elemento precisa pintar
+// o próprio fundo. Um texto desenhado sem fundo opaco vai aparecer por cima
+// do conteúdo anterior, não sobre preto.
+
+int16_t yTopoRodape() { return tft.height() - layout::uiFooterHeight(); }
+
+// Onde a área de conteúdo termina: acima da linha de dica, quando a tela
+// tem uma.
+int16_t yFimConteudo(bool comDica) {
+  const uint8_t fonte = layout::uiFontSize(1);
+  return comDica ? static_cast<int16_t>(yTopoRodape() - 8 * fonte - 2) : yTopoRodape();
+}
+
+// Apaga de "yDe" até o fim da área de conteúdo. É a única limpeza que
+// sobrou, e cobre só o que o desenho novo não alcançou.
+void limparSobra(int16_t yDe, bool comDica) {
+  const int16_t ate = yFimConteudo(comDica);
+  if (ate > yDe) tft.fillRect(0, yDe, tft.width(), ate - yDe, COR_FUNDO);
+}
+
+// Apaga a área de conteúdo inteira, preservando cabeçalho e rodapé. Para as
+// telas de desenho ESPARSO (gráfico, QR code, mensagem), onde não dá para
+// pintar o fundo elemento a elemento — uma curva não tem retângulo próprio.
+// Continua melhor que fillScreen: cabeçalho e barra de botões não piscam,
+// porque não são apagados para serem redesenhados iguais logo em seguida.
+void limparConteudo(bool comDica) {
+  const int16_t y0 = layout::uiHeaderHeight();
+  const int16_t y1 = yFimConteudo(comDica);
+  if (y1 > y0) tft.fillRect(0, y0, tft.width(), y1 - y0, COR_FUNDO);
+}
+
 void desenharTextoFaixa(int16_t y, uint8_t tamanho, uint16_t cor,
 						 const char* texto) {
   limparFaixa(y, 24);
@@ -396,15 +442,21 @@ void desenharBotoesRodape(const RotulosRodape& rotulos, bool mostrarVoltar = tru
                               AcaoToque::Confirmar};
   const char* textos[4] = {rotulos.voltar, rotulos.anterior, rotulos.proximo, rotulos.confirmar};
 
-  tft.fillRect(0, y, largura, alturaRodape, COR_FUNDO);
-
   for (uint8_t i = 0; i < 4; i++) {
-    if (i == 0 && !mostrarVoltar) continue;
-
     const int16_t x = i * larguraBotao;
-    // -1 na largura: deixa 1px de fundo entre botões vizinhos, senão a
-    // barra vira um bloco só e não dá pra ver onde um termina e o outro
-    // começa (importante quando o dedo cobre metade da barra).
+
+    // Separador de 1px entre botões vizinhos, senão a barra vira um bloco
+    // só e não dá pra ver onde um termina e o outro começa (importante
+    // quando o dedo cobre metade da barra). Desenhado aqui, e não por um
+    // fillRect de fundo na barra inteira antes do laço: aquele fundo era
+    // uma segunda passagem sobre os mesmos pixels.
+    if (i > 0) tft.drawFastVLine(x - 1, y, alturaRodape, COR_FUNDO);
+
+    if (i == 0 && !mostrarVoltar) {
+      tft.fillRect(x, y, larguraBotao - 1, alturaRodape, COR_FUNDO);
+      continue;
+    }
+
     tft.fillRect(x, y, larguraBotao - 1, alturaRodape, UI_COR_BOTAO);
 
     const int16_t larguraTexto = static_cast<int16_t>(std::strlen(textos[i]) * 6 * fonte);
@@ -440,8 +492,21 @@ void pintarZonaPressionada(const ZonaToque& z, bool pressionada) {
   imprimirTexto(z.x + (z.w - larguraTexto) / 2, z.y + (z.h - 8 * fonte) / 2, texto);
 }
 
-// Traduz um toque num item de lista para a sequência de eventos que o
-// encoder teria gerado: N passos até o item + confirmar. Ver ihm.hpp.
+// Toque num item de lista, em DOIS TEMPOS:
+//   1o toque num item que NÃO está selecionado -> só move o cursor até ele
+//                                                 (rajada de passos), sem ativar;
+//   toque num item que JÁ está selecionado     -> confirma.
+//
+// Ou seja: um toque num item novo é sempre inofensivo, e só o segundo toque
+// — agora sobre um item visivelmente destacado — executa a ação. Isso é o
+// que dá chance de corrigir a mira antes de acionar qualquer coisa, que num
+// touch resistivo com dedo adulto acontece o tempo todo. O preço é um toque
+// a mais por escolha; a alternativa (ativar no primeiro toque) executa
+// ações erradas e algumas são destrutivas — excluir arquivo, cancelar
+// experimento em andamento.
+//
+// A tradução para o vocabulário da máquina de estados continua a mesma: só
+// mudou onde entra o Confirmar. Ver ihm.hpp.
 void enfileirarSaltoParaItem(uint8_t destino) {
   if (destino == indiceSelecionadoAtual) {
     enfileirar(EventoFila::Confirmar);
@@ -453,7 +518,8 @@ void enfileirarSaltoParaItem(uint8_t destino) {
   } else {
     for (uint8_t i = destino; i < indiceSelecionadoAtual; i++) enfileirar(EventoFila::Anterior);
   }
-  enfileirar(EventoFila::Confirmar);
+  // Sem Confirmar aqui: o cursor só andou. Quem confirma é o próximo toque
+  // sobre o item (ou o botão OK do rodapé, que confirma direto).
 }
 
 // Leitura crua do XPT2046 com mediana de 3 amostras. Mediana em vez de
@@ -996,13 +1062,19 @@ void desenharListaMenu(const char* titulo, const char* const* itens, uint8_t qua
   indiceSelecionadoAtual = indiceSelecionado;
   quantidadeItensAtual = quantidade;
 
-  tft.fillScreen(COR_FUNDO);
+  // Sem fillScreen: passagem única, ver o comentário em limparSobra().
   desenharCabecalhoRodape(titulo);
 
   const int16_t yInicial = layout::uiHeaderHeight() + layout::uiMargin();
   const int16_t alturaLinha = layout::uiLineSpacing();
   const uint8_t fonte = layout::uiFontSize(1);
 
+  // Faixa fina entre o cabeçalho e a primeira linha (a margem) — precisa
+  // ser apagada porque nenhum item a cobre.
+  tft.fillRect(0, layout::uiHeaderHeight(), tft.width(), yInicial - layout::uiHeaderHeight(),
+               COR_FUNDO);
+
+  int16_t yFim = yInicial;
   for (uint8_t linha = 0; linha < itensVisiveis; linha++) {
     const uint8_t indiceItem = offsetRolagem + linha;
     if (indiceItem >= quantidade) break;
@@ -1010,24 +1082,27 @@ void desenharListaMenu(const char* titulo, const char* const* itens, uint8_t qua
     const int16_t y = yInicial + linha * alturaLinha;
     const bool selecionado = (indiceItem == indiceSelecionado);
 
-    if (selecionado) {
-      tft.fillRect(0, y - 1, tft.width(), alturaLinha, COR_SELECIONADO);
-    }
+    // Toda linha pinta o próprio fundo, selecionada ou não: é o que
+    // dispensa o fillScreen e apaga o que estava ali antes.
+    const uint16_t corFundoLinha = selecionado ? COR_SELECIONADO : COR_FUNDO;
+    tft.fillRect(0, y - 1, tft.width(), alturaLinha, corFundoLinha);
 
     char buffer[40];
     truncarTexto(buffer, sizeof(buffer), itens[indiceItem],
                  tft.width() - 2 * layout::uiMargin(), fonte);
 
     tft.setTextSize(fonte);
-    tft.setTextColor(selecionado ? COR_TEXTO_SELECIONADO : COR_TEXTO);
+    tft.setTextColor(selecionado ? COR_TEXTO_SELECIONADO : COR_TEXTO, corFundoLinha);
     // Centraliza o texto na altura da linha: a linha agora é bem mais alta
     // que o texto (piso de toque, UI_ALTURA_MINIMA_ALVO_TOQUE), então
     // escrever no topo dela deixaria o texto "colado" na linha de cima.
     imprimirTexto(layout::uiMargin(), y + (alturaLinha - 8 * fonte) / 2, buffer);
 
     registrarZona(0, y - 1, tft.width(), alturaLinha, AcaoToque::ItemLista, indiceItem);
+    yFim = y - 1 + alturaLinha;
   }
 
+  limparSobra(yFim, false);
   desenharBotoesRodape(RotulosRodape{});
 }
 
@@ -1038,34 +1113,38 @@ void desenharConfirmacao(const char* pergunta, uint8_t indiceSelecionado) {
   indiceSelecionadoAtual = indiceSelecionado;
   quantidadeItensAtual = 2;
 
-  tft.fillScreen(COR_FUNDO);
-  desenharCabecalhoRodape("Confirmar", "Toque na opcao desejada");
+  desenharCabecalhoRodape("Confirmar", "Toque de novo na opcao para confirmar");
 
   const uint8_t fonte = layout::uiFontSize(1);
   const int16_t yPergunta = layout::uiHeaderHeight() + layout::uiMargin();
+  const int16_t alturaLinha = layout::uiLineSpacing();
+
+  tft.fillRect(0, layout::uiHeaderHeight(), tft.width(),
+               yPergunta + alturaLinha * 2 - layout::uiHeaderHeight(), COR_FUNDO);
 
   char bufferPergunta[48];
   truncarTexto(bufferPergunta, sizeof(bufferPergunta), pergunta,
                tft.width() - 2 * layout::uiMargin(), fonte);
   tft.setTextSize(fonte);
-  tft.setTextColor(COR_VALOR);
+  tft.setTextColor(COR_VALOR, COR_FUNDO);
   imprimirTexto(layout::uiMargin(), yPergunta, bufferPergunta);
 
   static const char* const opcoes[2] = {"Sim", "Nao"};
-  const int16_t alturaLinha = layout::uiLineSpacing();
   const int16_t yOpcoes = yPergunta + alturaLinha * 2;
+  int16_t yFim = yOpcoes;
   for (uint8_t i = 0; i < 2; i++) {
     const bool selecionado = (i == indiceSelecionado);
     const int16_t y = yOpcoes + i * alturaLinha;
-    if (selecionado) {
-      tft.fillRect(0, y - 1, tft.width(), alturaLinha, COR_SELECIONADO);
-    }
+    const uint16_t corFundoLinha = selecionado ? COR_SELECIONADO : COR_FUNDO;
+    tft.fillRect(0, y - 1, tft.width(), alturaLinha, corFundoLinha);
     tft.setTextSize(fonte);
-    tft.setTextColor(selecionado ? COR_TEXTO_SELECIONADO : COR_TEXTO);
+    tft.setTextColor(selecionado ? COR_TEXTO_SELECIONADO : COR_TEXTO, corFundoLinha);
     imprimirTexto(layout::uiMargin(), y + (alturaLinha - 8 * fonte) / 2, opcoes[i]);
     registrarZona(0, y - 1, tft.width(), alturaLinha, AcaoToque::ItemLista, i);
+    yFim = y - 1 + alturaLinha;
   }
 
+  limparSobra(yFim, true);
   desenharBotoesRodape(RotulosRodape{});
 }
 
@@ -1075,7 +1154,6 @@ void desenharValorEditavel(const char* titulo, int32_t valor, int32_t minimo,
   TravaBarramentoDisplay travaBus;
   limparZonas();
 
-  tft.fillScreen(COR_FUNDO);
   desenharCabecalhoRodape(titulo, "- e + ajustam, OK confirma");
 
   const uint8_t fonteValor = layout::uiFontSize(3);
@@ -1086,16 +1164,25 @@ void desenharValorEditavel(const char* titulo, int32_t valor, int32_t minimo,
     snprintf(textoValor, sizeof(textoValor), "%ld", static_cast<long>(valor));
   }
 
+  // Faixa do valor apagada e reescrita: o número muda de largura (de "9"
+  // para "10", de "100" para "99"), então sem apagar a faixa inteira
+  // sobrariam dígitos do valor anterior nas pontas.
+  const int16_t alturaValor = 8 * fonteValor;
+  const int16_t yValor = layout::uiCenterY() - alturaValor / 2;
+  tft.fillRect(0, layout::uiHeaderHeight(), tft.width(),
+               yValor + alturaValor - layout::uiHeaderHeight(), COR_FUNDO);
+
   const int16_t larguraTexto = static_cast<int16_t>(std::strlen(textoValor) * 6 * fonteValor);
   tft.setTextSize(fonteValor);
-  tft.setTextColor(COR_VALOR);
-  imprimirTexto(layout::uiCenterX() - larguraTexto / 2, layout::uiCenterY() - 8 * fonteValor / 2,
-                textoValor);
+  tft.setTextColor(COR_VALOR, COR_FUNDO);
+  imprimirTexto(layout::uiCenterX() - larguraTexto / 2, yValor, textoValor);
 
   const int16_t barraX = layout::uiMargin();
   const int16_t barraY = tft.height() - layout::uiFooterHeight() - layout::uiHeight(20);
   const int16_t barraLargura = tft.width() - 2 * layout::uiMargin();
   const int16_t barraAltura = layout::uiHeight(8);
+
+  limparSobra(yValor + alturaValor, true);
 
   tft.drawRect(barraX, barraY, barraLargura, barraAltura, COR_RODAPE);
   const int32_t faixa = maximo - minimo;
@@ -1103,8 +1190,15 @@ void desenharValorEditavel(const char* titulo, int32_t valor, int32_t minimo,
   if (faixa > 0 && barraLargura > 2) {
     preenchido = static_cast<int16_t>((static_cast<int64_t>(valor - minimo) * (barraLargura - 2)) / faixa);
   }
+  // Interior da barra sempre repintado por inteiro (parte cheia + parte
+  // vazia): ao DIMINUIR o valor, só pintar a parte cheia deixaria o
+  // restante do preenchimento anterior na tela.
   if (preenchido > 0) {
     tft.fillRect(barraX + 1, barraY + 1, preenchido, barraAltura - 2, COR_CABECALHO);
+  }
+  if (preenchido < barraLargura - 2) {
+    tft.fillRect(barraX + 1 + preenchido, barraY + 1, barraLargura - 2 - preenchido,
+                 barraAltura - 2, COR_FUNDO);
   }
 
   // Mesmas posições e mesmas ações dos outros ecrãs; só os rótulos do meio
@@ -1121,7 +1215,6 @@ void desenharListaRolavel(const char* titulo, const char* const* linhas,
   TravaBarramentoDisplay travaBus;
   limparZonas();
 
-  tft.fillScreen(COR_FUNDO);
   desenharCabecalhoRodape(titulo, "Use ^ e v para rolar");
 
   // Uma linha a menos que o layout permite: a dica acima da barra de botões
@@ -1133,19 +1226,26 @@ void desenharListaRolavel(const char* titulo, const char* const* linhas,
   const int16_t alturaLinha = layout::uiLineSpacing();
   const uint8_t fonte = layout::uiFontSize(1);
 
+  tft.fillRect(0, layout::uiHeaderHeight(), tft.width(), yInicial - layout::uiHeaderHeight(),
+               COR_FUNDO);
   tft.setTextSize(fonte);
-  tft.setTextColor(COR_TEXTO);
+  tft.setTextColor(COR_TEXTO, COR_FUNDO);
 
+  int16_t yFim = yInicial;
   for (uint8_t linha = 0; linha < itensVisiveis; linha++) {
     const uint8_t indice = offsetRolagem + linha;
     if (indice >= quantidade) break;
 
+    const int16_t y = yInicial + linha * alturaLinha;
+    tft.fillRect(0, y, tft.width(), alturaLinha, COR_FUNDO);
     char buffer[40];
     truncarTexto(buffer, sizeof(buffer), linhas[indice],
                  tft.width() - 2 * layout::uiMargin(), fonte);
-    imprimirTexto(layout::uiMargin(), yInicial + linha * alturaLinha, buffer);
+    imprimirTexto(layout::uiMargin(), y, buffer);
+    yFim = y + alturaLinha;
   }
 
+  limparSobra(yFim, true);
   desenharBotoesRodape(RotulosRodape{});
 }
 
@@ -1155,7 +1255,7 @@ void desenharGradeModulos(const char* titulo, uint8_t dimensao,
   TravaBarramentoDisplay travaBus;
   limparZonas();
 
-  tft.fillScreen(COR_FUNDO);
+  limparConteudo(false);
   desenharCabecalhoRodape(titulo);
 
   if (dimensao == 0 || modulo == nullptr) {
@@ -1199,8 +1299,6 @@ void desenharTecladoTexto(const char* rotuloCampo, const char* valorAtual,
   indiceSelecionadoAtual = indiceSelecionado;
   quantidadeItensAtual = quantidade;
 
-  tft.fillScreen(COR_FUNDO);
-
   char titulo[48];
   snprintf(titulo, sizeof(titulo), "%s: %s", rotuloCampo != nullptr ? rotuloCampo : "",
            valorAtual != nullptr ? valorAtual : "");
@@ -1227,7 +1325,10 @@ void desenharTecladoTexto(const char* rotuloCampo, const char* valorAtual,
   const int16_t yInicial = layout::uiHeaderHeight() + layout::uiMargin();
   const int16_t yLimite = tft.height() - layout::uiFooterHeight();
 
+  tft.fillRect(0, layout::uiHeaderHeight(), tft.width(), yInicial - layout::uiHeaderHeight(),
+               COR_FUNDO);
   tft.setTextSize(fonte);
+  int16_t ultimaLinhaY = yInicial;
 
   for (uint8_t i = 0; i < quantidade; i++) {
     const uint8_t linha = i / colunas;
@@ -1240,19 +1341,21 @@ void desenharTecladoTexto(const char* rotuloCampo, const char* valorAtual,
     if (y + alturaCelula > yLimite) break;
 
     const bool selecionado = (i == indiceSelecionado);
-    if (selecionado) {
-      tft.fillRect(x, y, larguraCelula - 1, alturaCelula - 1, COR_SELECIONADO);
-    } else {
+    const uint16_t corFundoCelula = selecionado ? COR_SELECIONADO : COR_FUNDO;
+    tft.fillRect(x, y, larguraCelula - 1, alturaCelula - 1, corFundoCelula);
+    if (!selecionado) {
       tft.drawRect(x, y, larguraCelula - 1, alturaCelula - 1, UI_COR_BOTAO);
     }
-    tft.setTextColor(selecionado ? COR_TEXTO_SELECIONADO : COR_TEXTO);
+    tft.setTextColor(selecionado ? COR_TEXTO_SELECIONADO : COR_TEXTO, corFundoCelula);
     const int16_t larguraTexto = static_cast<int16_t>(std::strlen(rotulos[i]) * 6 * fonte);
     imprimirTexto(x + (larguraCelula - larguraTexto) / 2, y + (alturaCelula - 8 * fonte) / 2,
                   rotulos[i]);
 
     registrarZona(x, y, larguraCelula, alturaCelula, AcaoToque::ItemLista, i);
+    ultimaLinhaY = y + alturaCelula;
   }
 
+  limparSobra(ultimaLinhaY, false);
   desenharBotoesRodape(RotulosRodape{});
 }
 
@@ -1261,7 +1364,7 @@ void desenharMensagem(const char* titulo, const char* mensagem) {
   TravaBarramentoDisplay travaBus;
   limparZonas();
 
-  tft.fillScreen(COR_FUNDO);
+  limparConteudo(false);
   desenharCabecalhoRodape(titulo);
 
   const uint8_t fonte = layout::uiFontSize(1);
@@ -1280,7 +1383,7 @@ void desenharGrafico(const char* titulo, const float* temposS, const float* valo
   TravaBarramentoDisplay travaBus;
   limparZonas();
 
-  tft.fillScreen(COR_FUNDO);
+  limparConteudo(false);
   desenharCabecalhoRodape(titulo);
 
   const uint8_t fonte = layout::uiFontSize(1);

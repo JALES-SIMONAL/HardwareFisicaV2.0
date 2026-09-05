@@ -51,10 +51,23 @@ void escreverTextoTela(const char* texto, int16_t x = 10, int16_t y = 10,
 // produz. O toque direto num item de lista não vira "um comando novo": a
 // IHM sabe qual item está selecionado (recebe indiceSelecionado ao
 // desenhar) e qual foi tocado, e ENFILEIRA a diferença como uma rajada de
-// Proximo/Anterior seguida de um Confirmar. Do ponto de vista da máquina de
-// estados, é como se o usuário tivesse girado o encoder até o item e
-// clicado — nenhuma tela precisou ser reescrita, e o controle pelo
-// aplicativo Bluetooth continua entrando pelo mesmo caminho.
+// Proximo/Anterior. Do ponto de vista da máquina de estados, é como se o
+// usuário tivesse girado o encoder até o item — nenhuma tela precisou ser
+// reescrita, e o controle pelo aplicativo Bluetooth continua entrando pelo
+// mesmo caminho.
+//
+// SELEÇÃO EM DOIS TEMPOS (duplo toque)
+//
+//   1o toque num item que não está selecionado -> só move o cursor até ele;
+//   toque num item que já está selecionado     -> confirma.
+//
+// Um toque num item novo é, portanto, sempre inofensivo: ele apenas
+// destaca. Só o segundo toque, já sobre um item visivelmente selecionado,
+// executa a ação. Isso existe porque errar a mira num touch resistivo é
+// rotina, e várias ações do firmware são destrutivas (excluir arquivo,
+// cancelar experimento em andamento) — o custo de um toque a mais por
+// escolha é pequeno perto de executar a ação errada. O botão OK do rodapé
+// confirma direto, para quem já está com o item certo selecionado.
 //
 // Os eventos saem da fila UM POR TICK e na ordem em que entraram
 // (lerEventoNavegacao() só retira Proximo/Anterior; confirmacaoSolicitada()

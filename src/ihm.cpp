@@ -61,10 +61,28 @@ constexpr uint16_t COR_SELECIONADO = UI_COR_SELECIONADO;
 constexpr uint16_t COR_TEXTO_SELECIONADO = UI_COR_TEXTO_SELECIONADO;
 
 // PWM do brilho da tela (TFT_BL). Centraliza canal/frequência/resolução.
-constexpr uint8_t BRILHO_PWM_CANAL = 0;
+//
+// O CANAL NÃO PODE SER 0. O tone() do Arduino-ESP32 usa o canal LEDC 0 por
+// padrão (Tone.cpp: "static uint8_t _channel = 0") e, a cada nota, chama
+// ledcAttachPin(pinoDoBuzzer, 0). Isso REATRIBUI o canal 0 ao pino do
+// buzzer — e o pino do backlight, que estava preso nesse mesmo canal, fica
+// sem sinal: a tela apaga no primeiro beep e não volta mais.
+//
+// Na versão anterior (branch main) as duas coisas também estavam no canal
+// 0, mas o bug ficava escondido porque lá FORCE_DISPLAY_BACKLIGHT_DIAGNOSTIC
+// era true e o backlight nunca chegava a ser anexado ao LEDC — ficava só no
+// digitalWrite(HIGH). Ao desligar esse diagnóstico neste porte, o conflito
+// que já existia apareceu.
+constexpr uint8_t BRILHO_PWM_CANAL = 2;
 constexpr uint32_t BRILHO_PWM_FREQ_HZ = 5000;
 constexpr uint8_t BRILHO_PWM_RESOLUCAO_BITS = 8;
 constexpr uint8_t BRILHO_NIVEL_MAXIMO = 30;
+
+// Canal LEDC reservado ao tone(). Definido explicitamente em init() com
+// setToneChannel(), em vez de confiar no padrão: assim o canal do buzzer
+// fica declarado ao lado do canal do backlight, e um não invade o outro por
+// omissão.
+constexpr uint8_t BUZZER_PWM_CANAL = 4;
 
 // Frequência fixa do bipe do buzzer. O volume (0-30) só liga/desliga o som:
 // um buzzer passivo controlado por tone() não tem controle analógico de
@@ -478,6 +496,10 @@ void init() {
                 TFT_MOSI, TFT_MISO, TOUCH_CS);
 
   pinMode(BUZZER_PIN, OUTPUT);
+  // Tira o tone() do canal LEDC 0 (padrão dele) antes de qualquer beep —
+  // ver o comentário em BRILHO_PWM_CANAL. Sem isto, o primeiro beep rouba
+  // o canal do backlight e a tela apaga.
+  setToneChannel(BUZZER_PWM_CANAL);
 
   // Backlight ligado antes do init do painel: confirma que o circuito do
   // backlight funciona mesmo que o controlador não responda no SPI.
@@ -485,33 +507,63 @@ void init() {
   digitalWrite(TFT_BL, HIGH);
   Serial.printf("[DISPLAY] Backlight configurado (pino %d em HIGH)\n", TFT_BL);
 
+  // DESSELECIONA O CARTÃO ANTES DE FALAR COM A TELA.
+  //
+  // O SD compartilha SCK/MOSI/MISO com o display, e quem cuida do CS dele é
+  // o SD.begin() — que só roda bem depois, em armazenamento::init(). Até
+  // lá, SD_CS_PIN é uma entrada flutuante: se ela estiver em nível baixo
+  // durante o tft.init(), o cartão se considera selecionado e interpreta
+  // toda a sequência de inicialização do display como comandos SPI
+  // endereçados a ele. O resultado é um cartão em estado inconsistente, que
+  // depois recusa o SD.begin() — a falha aparece no SD, mas a causa está
+  // aqui.
+  //
+  // O TOUCH_CS não precisa do mesmo cuidado: o próprio tft.init() o coloca
+  // em HIGH (TFT_eSPI.cpp, linhas 543-546).
+  pinMode(SD_CS_PIN, OUTPUT);
+  digitalWrite(SD_CS_PIN, HIGH);
+  Serial.printf("[DISPLAY] SD desselecionado (pino %d em HIGH) antes de iniciar o painel\n",
+                SD_CS_PIN);
+
   tft.init();
   tft.setRotation(ROTACAO_DISPLAY);
 
-  // O TFT_eSPI não tem um begin() que retorne sucesso/falha como o
-  // Arduino_GFX tinha. Usa-se o registrador de ID do controlador como
-  // prova de vida: se ele responde, o barramento (inclusive o MISO) está
-  // funcionando de verdade. Uma resposta 00/FF significa painel mudo — o
-  // firmware segue rodando sem IHM local, exatamente como na main.
+  // O ID do controlador é lido só para DIAGNÓSTICO, e nunca para decidir se
+  // a tela existe.
+  //
+  // O TFT_eSPI não tem um begin() com retorno de sucesso como o
+  // Arduino_GFX tinha, e a leitura de registrador não serve de substituto:
+  // muitos destes painéis simplesmente não respondem ao 0xD3 (ou têm o SDO
+  // sem tri-state, ou compartilham o MISO com o touch/SD), e devolvem
+  // 00/FF mesmo funcionando perfeitamente para escrita. Condicionar
+  // displayOk a essa leitura desligava a IHM inteira — incluindo a
+  // calibração do toque — num painel são, deixando a tela com o lixo de
+  // RAM que ela mostra ao ligar. Escrita e leitura são caminhos
+  // independentes aqui; a falha de uma não prova nada sobre a outra.
   const uint8_t id1 = tft.readcommand8(0xD3, 1);
   const uint8_t id2 = tft.readcommand8(0xD3, 2);
   const uint8_t id3 = tft.readcommand8(0xD3, 3);
   Serial.printf("[DISPLAY] ID do controlador (0xD3): %02X %02X %02X\n", id1, id2, id3);
-  displayOk = !((id2 == 0x00 && id3 == 0x00) || (id2 == 0xFF && id3 == 0xFF));
-  Serial.printf("[DISPLAY] Painel considerado: %s\n", displayOk ? "DISPONIVEL" : "INDISPONIVEL");
+  Serial.println("[DISPLAY]   93 41 -> ILI9341 240x320 | 93 42 -> ILI9342 320x240");
+  Serial.println("[DISPLAY]   94 88 -> ILI9488 320x480 | 00/FF -> sem resposta de leitura");
+  Serial.println("[DISPLAY]   (so diagnostico: o driver em uso vem do platformio.ini)");
 
-  if (!displayOk) {
-    // Sem while(true)/return: registra a falha e deixa o restante do
-    // firmware (toque, LEDs, sensores, Bluetooth, SD) continuar. Todas as
-    // funções de desenho abaixo checam displayOk antes de desenhar.
-    Serial.println("[ERRO][DISPLAY] Sem resposta do controlador - display marcado como indisponivel");
-    Serial.println("[DISPLAY] Demais modulos do firmware continuarao normalmente");
-  } else {
-    Serial.printf("[DISPLAY] Resolucao: %d x %d (rotacao %d)\n", tft.width(), tft.height(),
-                  ROTACAO_DISPLAY);
-    tft.fillScreen(COR_FUNDO);
-    layout::init(tft.width(), tft.height());
-  }
+  displayOk = true;
+  Serial.printf("[DISPLAY] Resolucao configurada: %d x %d (rotacao %d)\n", tft.width(),
+                tft.height(), ROTACAO_DISPLAY);
+  tft.fillScreen(COR_FUNDO);
+  layout::init(tft.width(), tft.height());
+
+  // Teste visual rápido, herdado da ideia do "teste visual integrado" da
+  // main: três faixas de cor por meio segundo. Se elas aparecerem, o
+  // caminho de ESCRITA (SPI, CS, DC, RST e backlight) está inteiro, e
+  // qualquer problema seguinte é de geometria/driver, não de fiação.
+  const int16_t faixa = tft.height() / 3;
+  tft.fillRect(0, 0, tft.width(), faixa, TFT_RED);
+  tft.fillRect(0, faixa, tft.width(), faixa, TFT_GREEN);
+  tft.fillRect(0, 2 * faixa, tft.width(), tft.height() - 2 * faixa, TFT_BLUE);
+  delay(500);
+  tft.fillScreen(COR_FUNDO);
 
   // ---- Calibração do touch ----
   prefsToque.begin("ihm", true);
@@ -529,11 +581,9 @@ void init() {
     toqueOk = true;
     Serial.printf("[TOUCH] Calibracao carregada da NVS: {%u, %u, %u, %u, %u}\n", calData[0],
                   calData[1], calData[2], calData[3], calData[4]);
-  } else if (displayOk) {
+  } else {
     Serial.println("[TOUCH] Sem calibracao valida para esta geometria - calibrando agora");
     calibrarToque();
-  } else {
-    Serial.println("[TOUCH] Display indisponivel - calibracao adiada");
   }
 
   if (FORCE_DISPLAY_BACKLIGHT_DIAGNOSTIC) {

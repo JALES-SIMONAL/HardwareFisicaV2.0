@@ -1521,77 +1521,108 @@ void desenharTecladoTexto(const char* rotuloCampo, const char* valorAtual,
   indiceSelecionadoAtual = indiceSelecionado;
   quantidadeItensAtual = quantidade;
 
-  // Limpa a area de conteudo INTEIRA antes de montar a grade.
+  // ---------------------------------------------------------------------
+  // O teclado NAO usa a barra de quatro botoes do rodape.
+  // ---------------------------------------------------------------------
+  // Ele e a unica tela em que o proprio conteudo ja tem tudo o que os
+  // botoes ofereciam: mover e escolher se faz tocando na tecla, e o
+  // alfabeto tem simbolos proprios para confirmar (OK), apagar (<-) e
+  // cancelar (ESC). Manter a barra ali custava 42px de altura para repetir
+  // funcoes que as teclas ja cumprem — e com os alvos de toque em 42px isso
+  // deixou de ser um detalhe: so cabiam 4 linhas de 7 colunas, 28 dos 40
+  // simbolos, com 12 cortados fora da tela.
   //
-  // As teclas nao cobrem tudo: a ultima coluna quase nunca termina na borda
-  // (a largura util raramente e multiplo exato da celula) e a ultima linha
-  // idem. Sem esta limpeza, aquelas sobras ficavam com o desenho da tela
-  // anterior — os "resquicios" que apareciam nas telas de nome de arquivo e
-  // de senha. As demais telas nao precisam disto porque cada elemento delas
-  // pinta o proprio fundo cobrindo a linha inteira.
-  limparConteudo(false);
+  // Sobra apenas um botao "<" no cabecalho, porque sair da tela e a unica
+  // acao que o alfabeto nao expressa de forma obvia para quem nunca viu o
+  // ESC.
+  const int16_t larguraTela = tft.width();
+  const int16_t alturaCabecalho =
+      (layout::uiHeaderHeight() > UI_ALTURA_MINIMA_ALVO_TOQUE) ? layout::uiHeaderHeight()
+                                                               : UI_ALTURA_MINIMA_ALVO_TOQUE;
+  const uint8_t fonteTitulo = layout::uiFontSize(1);
+  const int16_t ladoBotaoVoltar = alturaCabecalho;
+
+  tft.fillRect(0, 0, larguraTela, alturaCabecalho, COR_CABECALHO);
+  tft.drawFastHLine(0, alturaCabecalho - 1, larguraTela, UI_COR_CONTORNO);
 
   char titulo[48];
   snprintf(titulo, sizeof(titulo), "%s: %s", rotuloCampo != nullptr ? rotuloCampo : "",
            valorAtual != nullptr ? valorAtual : "");
-  desenharCabecalhoRodape(titulo);
+  char tituloCortado[48];
+  truncarTexto(tituloCortado, sizeof(tituloCortado), titulo,
+               larguraTela - ladoBotaoVoltar - 2 * layout::uiMargin(), fonteTitulo);
+  tft.setTextSize(fonteTitulo);
+  tft.setTextColor(COR_TITULO, COR_CABECALHO);
+  imprimirTexto(layout::uiMargin(), (alturaCabecalho - 8 * fonteTitulo) / 2, tituloCortado);
 
-  if (quantidade == 0 || rotulos == nullptr) {
-    desenharBotoesRodape(RotulosRodape{});
-    return;
+  // Botao voltar, no canto superior direito.
+  const int16_t xVoltar = larguraTela - ladoBotaoVoltar;
+  tft.fillRoundRect(xVoltar + 2, 2, ladoBotaoVoltar - 5, alturaCabecalho - 5, UI_RAIO_BOTAO,
+                    UI_COR_BOTAO);
+  tft.drawRoundRect(xVoltar + 2, 2, ladoBotaoVoltar - 5, alturaCabecalho - 5, UI_RAIO_BOTAO,
+                    UI_COR_BORDA_TOQUE);
+  tft.setTextColor(UI_COR_TEXTO_BOTAO, UI_COR_BOTAO);
+  imprimirTexto(xVoltar + (ladoBotaoVoltar - 6 * fonteTitulo) / 2,
+                (alturaCabecalho - 8 * fonteTitulo) / 2, "<");
+  registrarZona(xVoltar, 0, ladoBotaoVoltar, alturaCabecalho, AcaoToque::Voltar, 0, "<");
+
+  // A grade ocupa TODO o resto da tela, ate a borda de baixo.
+  const int16_t areaY = alturaCabecalho;
+  const int16_t areaAltura = tft.height() - areaY;
+  tft.fillRect(0, areaY, larguraTela, areaAltura, COR_FUNDO);
+
+  if (quantidade == 0 || rotulos == nullptr) return;
+
+  // Escolhe o numero de colunas que da as MAIORES teclas cabendo todas.
+  // Procura o arranjo que maximiza o menor lado da celula — assim as teclas
+  // ficam o mais proximas de quadradas possivel, em vez de largas e baixas
+  // (ou o contrario), que e o que acontece ao fixar as colunas na mao.
+  uint8_t melhorColunas = 1;
+  int16_t melhorLado = 0;
+  for (uint8_t colunas = 1; colunas <= quantidade; colunas++) {
+    const uint8_t linhas = (quantidade + colunas - 1) / colunas;
+    const int16_t largCelula = larguraTela / colunas;
+    const int16_t altCelula = areaAltura / linhas;
+    const int16_t lado = (largCelula < altCelula) ? largCelula : altCelula;
+    if (lado > melhorLado) {
+      melhorLado = lado;
+      melhorColunas = colunas;
+    }
   }
 
-  const uint8_t fonte = layout::uiFontSize(1);
-  // Cada tecla precisa ser um alvo de dedo, não só um retângulo legível:
-  // largura e altura têm o mesmo piso de toque das linhas de lista. Com
-  // encoder, células de ~16px bastavam (a seleção vinha do giro).
-  const int16_t larguraCelula = UI_ALTURA_MINIMA_ALVO_TOQUE;
-  const int16_t alturaCelula = UI_ALTURA_MINIMA_ALVO_TOQUE;
+  const uint8_t colunas = melhorColunas;
+  const uint8_t linhas = (quantidade + colunas - 1) / colunas;
+  const int16_t largCelula = larguraTela / colunas;
+  const int16_t altCelula = areaAltura / linhas;
 
-  const int16_t areaLargura = tft.width() - 2 * layout::uiMargin();
-  uint8_t colunas = static_cast<uint8_t>(areaLargura / larguraCelula);
-  if (colunas < 1) colunas = 1;
-  if (colunas > quantidade) colunas = quantidade;
+  // Centraliza a grade na sobra da divisao inteira.
+  const int16_t xInicial = (larguraTela - colunas * largCelula) / 2;
+  const int16_t yInicial = areaY + (areaAltura - linhas * altCelula) / 2;
 
-  const int16_t xInicial = layout::uiMargin();
-  const int16_t yInicial = layout::uiHeaderHeight() + layout::uiMargin();
-  const int16_t yLimite = tft.height() - layout::uiFooterHeight();
-
-  tft.fillRect(0, layout::uiHeaderHeight(), tft.width(), yInicial - layout::uiHeaderHeight(),
-               COR_FUNDO);
+  // Maior fonte que ainda caiba o rotulo mais longo ("ESC", 3 caracteres).
+  // Metrica da fonte 1 do TFT_eSPI: 6px de avanco e 8px de altura por
+  // unidade de tamanho.
+  uint8_t fonte = 4;
+  while (fonte > 1 && (3 * 6 * fonte > largCelula - 4 || 8 * fonte > altCelula - 4)) fonte--;
   tft.setTextSize(fonte);
-  int16_t ultimaLinhaY = yInicial;
 
   for (uint8_t i = 0; i < quantidade; i++) {
-    const uint8_t linha = i / colunas;
-    const uint8_t coluna = i % colunas;
-    const int16_t x = xInicial + coluna * larguraCelula;
-    const int16_t y = yInicial + linha * alturaCelula;
-
-    // Grade grande demais pra área disponível: corta os últimos símbolos
-    // em vez de invadir o rodapé.
-    if (y + alturaCelula > yLimite) break;
+    const int16_t x = xInicial + (i % colunas) * largCelula;
+    const int16_t y = yInicial + (i / colunas) * altCelula;
 
     const bool selecionado = (i == indiceSelecionado);
     const uint16_t corFundoCelula = selecionado ? COR_SELECIONADO : UI_COR_CARTAO;
-    // Teclas arredondadas, no mesmo desenho dos cards da lista. Contorno
-    // em TODAS elas: e o que mostra o tamanho real do alvo de cada
-    // caractere.
-    tft.fillRoundRect(x + 1, y + 1, larguraCelula - 3, alturaCelula - 3, UI_RAIO_BOTAO,
-                      corFundoCelula);
-    tft.drawRoundRect(x + 1, y + 1, larguraCelula - 3, alturaCelula - 3, UI_RAIO_BOTAO,
+    tft.fillRoundRect(x + 1, y + 1, largCelula - 3, altCelula - 3, UI_RAIO_BOTAO, corFundoCelula);
+    tft.drawRoundRect(x + 1, y + 1, largCelula - 3, altCelula - 3, UI_RAIO_BOTAO,
                       selecionado ? UI_COR_PRIMARIA : UI_COR_BORDA_TOQUE);
+
     tft.setTextColor(selecionado ? COR_TEXTO_SELECIONADO : COR_TEXTO, corFundoCelula);
     const int16_t larguraTexto = static_cast<int16_t>(std::strlen(rotulos[i]) * 6 * fonte);
-    imprimirTexto(x + (larguraCelula - larguraTexto) / 2, y + (alturaCelula - 8 * fonte) / 2,
+    imprimirTexto(x + (largCelula - larguraTexto) / 2, y + (altCelula - 8 * fonte) / 2,
                   rotulos[i]);
 
-    registrarZona(x, y, larguraCelula, alturaCelula, AcaoToque::ItemLista, i);
-    ultimaLinhaY = y + alturaCelula;
+    registrarZona(x, y, largCelula, altCelula, AcaoToque::ItemLista, i);
   }
-
-  limparSobra(ultimaLinhaY, false);
-  desenharBotoesRodape(RotulosRodape{});
 }
 
 void desenharMensagem(const char* titulo, const char* mensagem) {

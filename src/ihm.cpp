@@ -1833,6 +1833,16 @@ bool desenharImagemBMP(const char* nomeComExtensao, int16_t x, int16_t y, int16_
   const bool origemTopoParaBase = (alturaBrutaOrigem < 0);
   const int32_t alturaOrigem = origemTopoParaBase ? -alturaBrutaOrigem : alturaBrutaOrigem;
 
+  // Relata o cabecalho lido. Sem isto, um arquivo com formato inesperado so
+  // se manifesta como "a cor saiu errada" ou "nao apareceu", sem dizer por
+  // que — e o arquivo no cartao nem sempre e o que esta no repositorio.
+  // bpp=24/32 e compressao=0 sao os unicos casos que este leitor decodifica.
+  Serial.printf("[BMP] %s: %ldx%ld, %u bits, compressao %u, dados em +%u, %s\n",
+                nomeComExtensao, static_cast<long>(larguraOrigem),
+                static_cast<long>(alturaOrigem), static_cast<unsigned>(bpp),
+                static_cast<unsigned>(compressao), static_cast<unsigned>(offsetDados),
+                origemTopoParaBase ? "topo-para-base" : "base-para-topo");
+
   // Só BI_RGB (sem compressão) de 24 ou 32 bits — cobre o caso comum de
   // exportação simples; qualquer outro formato cai no retrocesso do
   // chamador (texto), sem tentar decodificar.
@@ -1967,6 +1977,8 @@ bool desenharImagemBMP(const char* nomeComExtensao, int16_t x, int16_t y, int16_
   free(linhaOrigem);
   free(linhaSaida);
   armazenamento::fecharBinario();
+  Serial.printf("[BMP] %s: desenho %s\n", nomeComExtensao,
+                leituraCompleta ? "completo" : "INTERROMPIDO");
   return leituraCompleta;
 }
 

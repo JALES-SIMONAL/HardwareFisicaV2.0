@@ -175,9 +175,10 @@ constexpr uint8_t QTD_EXPERIMENTOS = 4;
 // ja tinha esse acesso.
 constexpr const char* ITENS_CONFIGURACOES[] = {
     "Conexao com app",  "Modo de operacao", "Brilho da tela",       "Volume",
-    "Config. canais/sensores", "Manual",    "Sobre", "Analise de dados", "Voltar",
+    "Config. canais/sensores", "Manual",    "Sobre", "Analise de dados",
+    "Recalibrar toque", "Voltar",
 };
-constexpr uint8_t QTD_CONFIGURACOES = 9;
+constexpr uint8_t QTD_CONFIGURACOES = 10;
 // Índice de "Analise de dados" em ITENS_CONFIGURACOES — usado por
 // redesenharConfiguracoes() para acrescentar "ON"/"OFF" ao rótulo (o
 // usuário não tinha como saber o estado atual sem entrar no item).
@@ -1585,7 +1586,18 @@ void tratarConfiguracoes(const Command& cmd) {
         case 5: navegarPara(Tela::Manual); break;
         case 6: navegarPara(Tela::Sobre); break;
         case 7: solicitarSenhaOuExecutar(AcaoAposSenha::AbrirToggleAnalise); break;
-        case 8: voltarUmNivel(); break;
+        case 8:
+          // Recalibra o toque. E bloqueante (espera o usuario tocar nos
+          // quatro cantos) e so pode ser chamada de uma tela parada como
+          // esta — nunca durante um experimento, que perderia eventos
+          // enquanto a calibracao segura o laco principal.
+          //
+          // Ao terminar, redesenha a tela atual: calibrarToque() escreve
+          // por cima de tudo e deixa a tela limpa.
+          ihm::calibrarToque();
+          precisaRedesenhar = true;
+          break;
+        case 9: voltarUmNivel(); break;
         default: break;
       }
       break;

@@ -238,6 +238,23 @@ constexpr uint16_t UI_COR_TEXTO_SELECIONADO = 0x0000;  // preto
 // ("Gire para ajustar, KEY confirma"), porque nao havia onde tocar.
 constexpr uint16_t UI_COR_BOTAO = 0x39E7;         // cinza medio
 constexpr uint16_t UI_COR_TEXTO_BOTAO = 0xFFFF;   // branco
+
+// Cor (RGB565) do contorno que delimita TODA area tocavel — item de lista,
+// opcao de confirmacao, tecla do teclado e botao do rodape.
+//
+// Nao existia na versao com encoder e nao faria sentido la: com o giro, a
+// area de um item era irrelevante, o que importava era qual estava
+// destacado. Com toque, o usuario precisa saber ONDE encostar antes de
+// encostar — sem o contorno, um item nao selecionado e so um texto solto no
+// preto, e nao ha como adivinhar que a faixa clicavel vai de ponta a ponta
+// da tela e e mais alta que a letra.
+constexpr uint16_t UI_COR_BORDA_TOQUE = 0x4A69;  // cinza escuro
+
+// Recuo (px) do contorno para dentro da area tocavel. A area que RESPONDE
+// ao toque e de proposito um pouco maior que o retangulo desenhado: erra-se
+// mais para fora da borda do que para dentro, entao a folga trabalha a
+// favor de quem mira.
+constexpr int16_t UI_RECUO_BORDA_TOQUE = 2;
 // Cor do botao enquanto o dedo esta em cima dele (retorno visual imediato
 // do toque — com encoder isso nao fazia sentido, com touch e essencial:
 // sem ele o usuario nao sabe se o toque foi registrado).

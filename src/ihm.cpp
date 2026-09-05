@@ -537,6 +537,7 @@ void desenharBotoesRodape(const RotulosRodape& rotulos, bool mostrarVoltar = tru
     }
 
     tft.fillRect(x, y, larguraBotao - 1, alturaRodape, UI_COR_BOTAO);
+    tft.drawRect(x, y, larguraBotao - 1, alturaRodape, UI_COR_BORDA_TOQUE);
 
     const int16_t larguraTexto = static_cast<int16_t>(std::strlen(textos[i]) * 6 * fonte);
     tft.setTextSize(fonte);
@@ -557,6 +558,7 @@ void pintarZonaPressionada(const ZonaToque& z, bool pressionada) {
   const uint8_t fonte = layout::uiFontSize(1);
   const uint16_t corFundo = pressionada ? UI_COR_BOTAO_PRESSIONADO : UI_COR_BOTAO;
   tft.fillRect(z.x, z.y, z.w - 1, z.h, corFundo);
+  tft.drawRect(z.x, z.y, z.w - 1, z.h, UI_COR_BORDA_TOQUE);
   const int16_t larguraTexto = static_cast<int16_t>(std::strlen(z.rotulo) * 6 * fonte);
   tft.setTextSize(fonte);
   tft.setTextColor(pressionada ? UI_COR_TEXTO_SELECIONADO : UI_COR_TEXTO_BOTAO, corFundo);
@@ -1251,6 +1253,13 @@ void desenharListaMenu(const char* titulo, const char* const* itens, uint8_t qua
     // dispensa o fillScreen e apaga o que estava ali antes.
     const uint16_t corFundoLinha = selecionado ? COR_SELECIONADO : COR_FUNDO;
     tft.fillRect(0, y - 1, tft.width(), alturaLinha, corFundoLinha);
+    // Contorno da area tocavel. Desenhado tambem no item selecionado: sem
+    // ele, o destaque preencheria a linha inteira e se perderia a referencia
+    // de onde uma linha termina e a seguinte comeca.
+    tft.drawRect(UI_RECUO_BORDA_TOQUE, y - 1 + UI_RECUO_BORDA_TOQUE,
+                 tft.width() - 2 * UI_RECUO_BORDA_TOQUE,
+                 alturaLinha - 2 * UI_RECUO_BORDA_TOQUE,
+                 selecionado ? COR_TEXTO_SELECIONADO : UI_COR_BORDA_TOQUE);
 
     char buffer[40];
     truncarTexto(buffer, sizeof(buffer), itens[indiceItem],
@@ -1302,6 +1311,13 @@ void desenharConfirmacao(const char* pergunta, uint8_t indiceSelecionado) {
     const int16_t y = yOpcoes + i * alturaLinha;
     const uint16_t corFundoLinha = selecionado ? COR_SELECIONADO : COR_FUNDO;
     tft.fillRect(0, y - 1, tft.width(), alturaLinha, corFundoLinha);
+    // Contorno da area tocavel. Desenhado tambem no item selecionado: sem
+    // ele, o destaque preencheria a linha inteira e se perderia a referencia
+    // de onde uma linha termina e a seguinte comeca.
+    tft.drawRect(UI_RECUO_BORDA_TOQUE, y - 1 + UI_RECUO_BORDA_TOQUE,
+                 tft.width() - 2 * UI_RECUO_BORDA_TOQUE,
+                 alturaLinha - 2 * UI_RECUO_BORDA_TOQUE,
+                 selecionado ? COR_TEXTO_SELECIONADO : UI_COR_BORDA_TOQUE);
     tft.setTextSize(fonte);
     tft.setTextColor(selecionado ? COR_TEXTO_SELECIONADO : COR_TEXTO, corFundoLinha);
     imprimirTexto(layout::uiMargin(), y + (alturaLinha - 8 * fonte) / 2, opcoes[i]);
@@ -1512,9 +1528,10 @@ void desenharTecladoTexto(const char* rotuloCampo, const char* valorAtual,
     const bool selecionado = (i == indiceSelecionado);
     const uint16_t corFundoCelula = selecionado ? COR_SELECIONADO : COR_FUNDO;
     tft.fillRect(x, y, larguraCelula - 1, alturaCelula - 1, corFundoCelula);
-    if (!selecionado) {
-      tft.drawRect(x, y, larguraCelula - 1, alturaCelula - 1, UI_COR_BOTAO);
-    }
+    // Contorno em TODAS as teclas (antes so nas nao selecionadas): e o que
+    // mostra o tamanho real do alvo de cada caractere.
+    tft.drawRect(x, y, larguraCelula - 1, alturaCelula - 1,
+                 selecionado ? COR_TEXTO_SELECIONADO : UI_COR_BORDA_TOQUE);
     tft.setTextColor(selecionado ? COR_TEXTO_SELECIONADO : COR_TEXTO, corFundoCelula);
     const int16_t larguraTexto = static_cast<int16_t>(std::strlen(rotulos[i]) * 6 * fonte);
     imprimirTexto(x + (larguraCelula - larguraTexto) / 2, y + (alturaCelula - 8 * fonte) / 2,
@@ -1763,38 +1780,74 @@ bool desenharImagemBMP(const char* nomeComExtensao, int16_t x, int16_t y, int16_
     return false;
   }
 
-  // Escala uniforme (preserva proporção), só reduz — nunca amplia além do
-  // tamanho original da imagem.
-  float escala = 1.0f;
-  if (larguraOrigem > larguraMaxima) escala = static_cast<float>(larguraOrigem) / larguraMaxima;
-  if ((alturaOrigem / escala) > alturaMaxima) escala = static_cast<float>(alturaOrigem) / alturaMaxima;
+  // Escala uniforme, preservando a proporção — AMPLIA quando a imagem é
+  // menor que a área disponível, ao contrário da versão anterior, que só
+  // reduzia. Com as logos de boot (160x128 e 164x52) numa tela de 320x240,
+  // "nunca ampliar" significava desenhá-las no tamanho original: um quarto
+  // da tela e um oitavo dela, respectivamente.
+  //
+  // escala < 1 amplia, > 1 reduz. Toma-se o MAIOR dos dois fatores para a
+  // imagem caber inteira na caixa (o menor a faria transbordar no outro
+  // eixo).
+  const float escalaLargura = static_cast<float>(larguraOrigem) / larguraMaxima;
+  const float escalaAltura = static_cast<float>(alturaOrigem) / alturaMaxima;
+  float escala = (escalaLargura > escalaAltura) ? escalaLargura : escalaAltura;
+  if (escala <= 0.0f) escala = 1.0f;
 
-  const int16_t larguraSaida = static_cast<int16_t>(larguraOrigem / escala);
-  const int16_t alturaSaida = static_cast<int16_t>(alturaOrigem / escala);
+  int16_t larguraSaida = static_cast<int16_t>(larguraOrigem / escala);
+  int16_t alturaSaida = static_cast<int16_t>(alturaOrigem / escala);
+  // Arredondamento pode estourar a caixa em 1px; prende nos limites.
+  if (larguraSaida > larguraMaxima) larguraSaida = larguraMaxima;
+  if (alturaSaida > alturaMaxima) alturaSaida = alturaMaxima;
+  if (larguraSaida < 1 || alturaSaida < 1) {
+    armazenamento::fecharBinario();
+    return false;
+  }
+
   const int16_t xCentralizado = x + (larguraMaxima - larguraSaida) / 2;
   const int16_t yCentralizado = y + (alturaMaxima - alturaSaida) / 2;
 
+  // Desenho LINHA A LINHA, sem framebuffer da imagem inteira.
+  //
+  // A versão anterior lia a imagem toda para a RAM antes de desenhar, por um
+  // motivo que deixou de existir: naquela época alternar o dono do barramento
+  // (SD <-> display) a cada linha corrompia o cartão, porque o display era
+  // bit-bang e o SD era SPI de hardware nos mesmos pinos. Hoje os dois usam o
+  // mesmo periférico e só alternam o CS, então intercalar leitura e desenho
+  // por linha é seguro.
+  //
+  // E passou a ser necessário: ampliando para a tela cheia, aquele buffer
+  // seria 320*240*2 = 150KB de RAM interna — inviável ao lado do NimBLE.
+  // Assim são ~1,3KB (uma linha de origem + uma de destino).
   uint8_t* linhaOrigem = static_cast<uint8_t*>(malloc(passoLinha));
-  // Buffer da imagem de SAÍDA inteira (não só uma linha): lê-se tudo do SD
-  // primeiro e só depois desenha de uma vez. Isso vinha da main, onde
-  // alternar dono do barramento por linha corrompia o cartão. Aqui o
-  // barramento não troca mais de dono, mas o buffer completo continua
-  // valendo a pena: uma única transferência para o painel em vez de uma
-  // por linha.
-  uint16_t* framebuffer = static_cast<uint16_t*>(
-      malloc(static_cast<size_t>(larguraSaida) * static_cast<size_t>(alturaSaida) * sizeof(uint16_t)));
-  if (linhaOrigem == nullptr || framebuffer == nullptr) {
-    Serial.println("[IHM] BMP: sem memoria para buffer de imagem");
+  uint16_t* linhaSaida =
+      static_cast<uint16_t*>(malloc(static_cast<size_t>(larguraSaida) * sizeof(uint16_t)));
+  if (linhaOrigem == nullptr || linhaSaida == nullptr) {
+    Serial.println("[IHM] BMP: sem memoria para buffer de linha");
     free(linhaOrigem);
-    free(framebuffer);
+    free(linhaSaida);
     armazenamento::fecharBinario();
     return false;
   }
 
   Serial.printf("[IHM] Lendo BMP %s do SD (%ldx%ld -> %dx%d)\n", nomeComExtensao,
-                static_cast<long>(larguraOrigem), static_cast<long>(alturaOrigem), larguraSaida, alturaSaida);
+                static_cast<long>(larguraOrigem), static_cast<long>(alturaOrigem), larguraSaida,
+                alturaSaida);
+
+  // Limpa a área de destino ANTES de desenhar: a imagem é centralizada
+  // preservando a proporção, então uma imagem com proporção diferente da
+  // anterior pode não cobrir toda a área, deixando sobras visíveis nas bordas.
+  {
+    TravaBarramentoDisplay travaBus;
+    tft.fillRect(x, y, larguraMaxima, alturaMaxima, COR_FUNDO);
+  }
 
   bool leituraCompleta = true;
+  // Ao ampliar, várias linhas de saída vêm da MESMA linha de origem. Guardar
+  // qual está no buffer evita reler e reconverter a mesma linha do cartão —
+  // numa ampliação de 2x isso corta metade dos acessos ao SD.
+  int32_t linhaOrigemEmBuffer = -1;
+
   for (int16_t linhaSaidaIdx = 0; linhaSaidaIdx < alturaSaida; linhaSaidaIdx++) {
     const int32_t linhaOrigemIdx = static_cast<int32_t>(linhaSaidaIdx * escala);
     // BMP padrão é bottom-up: a primeira linha do arquivo é a ÚLTIMA linha
@@ -1802,42 +1855,40 @@ bool desenharImagemBMP(const char* nomeComExtensao, int16_t x, int16_t y, int16_
     // top-down (já na ordem de exibição).
     const int32_t linhaArquivo =
         origemTopoParaBase ? linhaOrigemIdx : (alturaOrigem - 1 - linhaOrigemIdx);
-    const uint32_t offsetLinha = offsetDados + static_cast<uint32_t>(linhaArquivo) * passoLinha;
 
-    if (!armazenamento::posicionarBinario(offsetLinha) ||
-        armazenamento::lerBinario(linhaOrigem, passoLinha) != passoLinha) {
-      Serial.println("[IHM] BMP: falha de leitura no meio do arquivo, interrompendo");
-      leituraCompleta = false;
-      break;
+    if (linhaArquivo != linhaOrigemEmBuffer) {
+      const uint32_t offsetLinha = offsetDados + static_cast<uint32_t>(linhaArquivo) * passoLinha;
+      // Fora de qualquer TravaBarramentoDisplay: estas funções tomam o mesmo
+      // mutex internamente, e ele não é recursivo — segurá-lo aqui travaria
+      // o firmware.
+      if (!armazenamento::posicionarBinario(offsetLinha) ||
+          armazenamento::lerBinario(linhaOrigem, passoLinha) != passoLinha) {
+        Serial.println("[IHM] BMP: falha de leitura no meio do arquivo, interrompendo");
+        leituraCompleta = false;
+        break;
+      }
+      linhaOrigemEmBuffer = linhaArquivo;
+
+      for (int16_t colunaSaidaIdx = 0; colunaSaidaIdx < larguraSaida; colunaSaidaIdx++) {
+        int32_t colunaOrigemIdx = static_cast<int32_t>(colunaSaidaIdx * escala);
+        if (colunaOrigemIdx >= larguraOrigem) colunaOrigemIdx = larguraOrigem - 1;
+        const uint8_t* pixel = linhaOrigem + static_cast<uint32_t>(colunaOrigemIdx) * bytesPorPixel;
+        // BMP grava BGR(A); RGB565 = RRRRR GGGGGG BBBBB.
+        const uint8_t azul = pixel[0];
+        const uint8_t verde = pixel[1];
+        const uint8_t vermelho = pixel[2];
+        linhaSaida[colunaSaidaIdx] = static_cast<uint16_t>(((vermelho & 0xF8) << 8) |
+                                                            ((verde & 0xFC) << 3) | (azul >> 3));
+      }
     }
 
-    uint16_t* linhaSaidaBuffer = framebuffer + static_cast<size_t>(linhaSaidaIdx) * larguraSaida;
-    for (int16_t colunaSaidaIdx = 0; colunaSaidaIdx < larguraSaida; colunaSaidaIdx++) {
-      const int32_t colunaOrigemIdx = static_cast<int32_t>(colunaSaidaIdx * escala);
-      const uint8_t* pixel = linhaOrigem + static_cast<uint32_t>(colunaOrigemIdx) * bytesPorPixel;
-      // BMP grava BGR(A); RGB565 = RRRRR GGGGGG BBBBB.
-      const uint8_t azul = pixel[0];
-      const uint8_t verde = pixel[1];
-      const uint8_t vermelho = pixel[2];
-      linhaSaidaBuffer[colunaSaidaIdx] = static_cast<uint16_t>(((vermelho & 0xF8) << 8) |
-                                                                ((verde & 0xFC) << 3) | (azul >> 3));
-    }
+    TravaBarramentoDisplay travaBus;
+    tft.pushImage(xCentralizado, yCentralizado + linhaSaidaIdx, larguraSaida, 1, linhaSaida);
   }
 
   free(linhaOrigem);
+  free(linhaSaida);
   armazenamento::fecharBinario();
-
-  if (leituraCompleta) {
-    TravaBarramentoDisplay travaBus;
-    // Limpa a área de destino ANTES de desenhar: a imagem é centralizada
-    // sem nunca ampliar (preserva proporção), então uma imagem com
-    // proporção diferente da anterior pode não cobrir toda a área,
-    // deixando sobras da imagem/tela anterior visíveis nas bordas.
-    tft.fillRect(x, y, larguraMaxima, alturaMaxima, COR_FUNDO);
-    tft.pushImage(xCentralizado, yCentralizado, larguraSaida, alturaSaida, framebuffer);
-  }
-
-  free(framebuffer);
   return leituraCompleta;
 }
 

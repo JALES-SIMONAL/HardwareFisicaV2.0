@@ -697,10 +697,19 @@ void tratarExperimentoRepeticoes(const Command& cmd) {
       break;
     }
     case CommandType::Back:
-      // Sai da edição, volta ao seletor (não à tela anterior) — igual ao
-      // padrão de Brilho/Volume.
-      edicaoValor.emEdicao = false;
-      precisaRedesenhar = true;
+      // Back cancela o nivel MAIS INTERNO: com a edicao aberta, sai dela e
+      // volta ao seletor; sem edicao aberta, volta de tela.
+      //
+      // Antes so fazia a primeira metade, e fora do modo de edicao o Back
+      // caia no vazio — com o encoder isso nunca aparecia (ele nao gerava
+      // Back), mas com o botao "<" do rodape a tela virava um beco sem
+      // saida pelo toque.
+      if (edicaoValor.emEdicao) {
+        edicaoValor.emEdicao = false;
+        precisaRedesenhar = true;
+      } else {
+        voltarUmNivel();
+      }
       break;
     default:
       break;
@@ -1216,8 +1225,19 @@ void tratarAnaliseLinearDistancia(const Command& cmd) {
       break;
     }
     case CommandType::Back:
-      edicaoValor.emEdicao = false;
-      precisaRedesenhar = true;
+      // Back cancela o nivel MAIS INTERNO: com a edicao aberta, sai dela e
+      // volta ao seletor; sem edicao aberta, volta de tela.
+      //
+      // Antes so fazia a primeira metade, e fora do modo de edicao o Back
+      // caia no vazio — com o encoder isso nunca aparecia (ele nao gerava
+      // Back), mas com o botao "<" do rodape a tela virava um beco sem
+      // saida pelo toque.
+      if (edicaoValor.emEdicao) {
+        edicaoValor.emEdicao = false;
+        precisaRedesenhar = true;
+      } else {
+        voltarUmNivel();
+      }
       break;
     default:
       break;
@@ -2774,16 +2794,21 @@ void tick() {
   }
 }
 
-// Diz se a tela cuida do comando Back por conta propria (ou se ele deve
-// ser ignorado nela). Para todas as outras, processarComando() aplica o
+// Diz se a tela cuida do comando Back por conta propria (ou se ele deve ser
+// ignorado nela). Para todas as outras, processarComando() aplica o
 // comportamento generico: voltar um nivel.
 //
 // POR QUE ISTO EXISTE: com o encoder nao havia como emitir Back — so o
-// Bluetooth emitia, e so 16 dos 39 tratadores de tela chegaram a trata-lo.
-// Quando o toque ganhou o botao "<" do rodape, ele passou a emitir Back em
-// TODAS as telas, e nas outras 23 o comando chegava e ninguem agia: o botao
-// simplesmente nao fazia nada. Este switch fecha esse buraco sem mexer nos
-// tratadores que ja tem logica propria de Back.
+// Bluetooth emitia, e a maioria dos tratadores de tela nunca chegou a
+// trata-lo. Quando o toque ganhou o botao "<" do rodape, ele passou a
+// emitir Back em TODAS as telas, e naquelas o comando chegava e ninguem
+// agia: o botao simplesmente nao fazia nada.
+//
+// A lista abaixo foi levantada lendo o despacho de comandos tela por tela.
+// A primeira versao dela errou por confiar em busca de texto, que casava
+// tambem com Back citado em COMENTARIO e com telas cujo Back so fechava um
+// modo de edicao sem ter para onde ir depois — por isso varias telas
+// continuavam sem saida pelo botao "<".
 //
 // E um switch exaustivo de proposito, sem "default": se alguem acrescentar
 // uma tela ao enum, o compilador avisa (-Wswitch) que ela precisa de uma
@@ -2796,35 +2821,41 @@ bool telaCuidaDoBack(Tela tela) {
       return true;
 
     // Experimento EM ANDAMENTO. Voltar daqui abandonaria uma medicao em
-    // curso sem confirmacao — o caminho de saida e o item de cancelamento,
-    // que passa pela tela de confirmacao.
+    // curso sem confirmacao — a saida e o item de cancelamento, que passa
+    // pela tela de confirmacao.
     case Tela::ExperimentoExecucao:
       return true;
 
-    // Telas cujo proprio tratador ja implementa Back.
-    case Tela::Manual:
-    case Tela::Sobre:
-    case Tela::SenhaValidar:
-    case Tela::ExperimentoRepeticoes:
+    // Editor de texto (nome de arquivo, renomear, senha): o Back chama
+    // cancelarEdicaoNomeArquivo(), que desfaz a edicao e ja volta um nivel.
     case Tela::ExperimentoNomeArquivo:
-    case Tela::TesteCanais:
-    case Tela::GerenciamentoArquivos:
     case Tela::ArquivoRenomear:
-    case Tela::ArquivoDados:
     case Tela::ConexaoAppRenomear:
-    case Tela::AnaliseSelecionarArquivo:
-    case Tela::AnaliseTipo:
+    case Tela::SenhaValidar:
+      return true;
+
+    // Seletores de valor: Back fecha a edicao se ela estiver aberta e volta
+    // de tela caso contrario (ver os tratadores).
+    case Tela::ExperimentoRepeticoes:
     case Tela::AnaliseLinearDistancia:
+    case Tela::AnaliseCircularRaioVaos:
+      return true;
+
+    // Telas de analise que ja implementam Back chamando voltarUmNivel().
+    case Tela::ArquivoDados:
+    case Tela::AnaliseTipo:
     case Tela::AnaliseLinearResultado:
     case Tela::AnaliseLinearEscolherRepeticao:
     case Tela::AnaliseLinearGrafico:
-    case Tela::AnaliseCircularRaioVaos:
     case Tela::AnaliseCircularResultado:
     case Tela::AnaliseCircularEscolherRepeticao:
     case Tela::AnaliseCircularGrafico:
       return true;
 
     // Todas as demais recebem o Back generico (voltar um nivel).
+    case Tela::Manual:
+    case Tela::Sobre:
+    case Tela::TesteCanais:
     case Tela::Configuracoes:
     case Tela::ModoOperacao:
     case Tela::Brilho:
@@ -2842,10 +2873,12 @@ bool telaCuidaDoBack(Tela tela) {
     case Tela::ExperimentoCancelarConfirmar:
     case Tela::ExperimentoReiniciarConfirmar:
     case Tela::ExperimentoSobrescreverConfirmar:
+    case Tela::GerenciamentoArquivos:
     case Tela::ArquivoDetalhe:
     case Tela::ArquivoExcluirConfirmar:
     case Tela::ArquivosExcluirTodosConfirmar:
     case Tela::ConexaoApp:
+    case Tela::AnaliseSelecionarArquivo:
       return false;
   }
   return false;

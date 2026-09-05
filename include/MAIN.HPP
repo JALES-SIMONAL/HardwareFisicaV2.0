@@ -211,7 +211,7 @@ constexpr float UI_FONT_SIZE_MULTIPLICADOR = 1.0f;
 // valor como PISO do espacamento de linha, sem mexer no tamanho da fonte —
 // o texto continua do tamanho proporcional calculado, so ganha mais espaco
 // em volta. Custo: menos itens por tela, mais rolagem.
-constexpr int16_t UI_ALTURA_MINIMA_ALVO_TOQUE = 32;
+constexpr int16_t UI_ALTURA_MINIMA_ALVO_TOQUE = 42;
 
 // ---------------------------------------------------------------------
 // ORDEM DOS CANAIS DE COR DO PAINEL  <-- AJUSTE AQUI

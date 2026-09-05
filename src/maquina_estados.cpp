@@ -2219,6 +2219,12 @@ void redesenharArquivoDados() {
 // Atualiza telas cujo conteúdo muda sozinho, sem entrada do encoder/tecla:
 // teste de canais (nível dos sensores) e execução de experimento (tempo,
 // eventos). Ambas são redesenhadas em um intervalo fixo, não a cada tick.
+// Invalida o cache de nivel dos LEDs do teste de canais (ver
+// atualizarTelasAoVivo). Existe porque o cache guarda o que foi ESCRITO na
+// fita, e sair da tela apaga a fita por fora dele.
+bool ledsTesteCanaisPrecisamReescrever = true;
+void forcarReescritaLedsTesteCanais() { ledsTesteCanaisPrecisamReescrever = true; }
+
 void atualizarTelasAoVivo() {
   // LEDs: acompanham o teste de canais tanto local (tela física em
   // Tela::TesteCanais) quanto remoto (app com a tela aberta, ver
@@ -2228,15 +2234,47 @@ void atualizarTelasAoVivo() {
   // enquanto o app testa, os dois só concordam, já que refletem o mesmo
   // nível físico).
   if (estado.telaAtual == Tela::TesteCanais || testeCanaisAtivoRemoto) {
+    // So escreve no LED quando o nivel do canal REALMENTE muda.
+    //
+    // Antes reescrevia os seis a cada tick, e cada ihm::controlarLED() faz
+    // um pixels.show() proprio — ou seja, seis atualizacoes completas da
+    // fita por volta do laco, centenas por segundo. Isso produzia o
+    // piscar: os LEDs eram reacendidos continuamente e nunca ficavam
+    // estaveis o bastante para a cor ser lida a olho. Alem disso, cada
+    // chamada refazia setBrightness(), que no Adafruit_NeoPixel reescala o
+    // buffer inteiro quando o valor muda — com o brilho alternando entre o
+    // do teste (30), o das indicacoes BLE (80) e o de desligar (0), a cor
+    // ia degradando a cada reescala.
+    //
+    // Com o cache abaixo, cada LED e escrito uma vez por transicao. Entre
+    // transicoes a fita nao e tocada.
+    static bool nivelAnteriorLed[NUM_CHANNELS] = {false};
+
     for (uint8_t canal1based = 1; canal1based <= NUM_CHANNELS; canal1based++) {
       const uint16_t indiceLed = canal1based - 1;
       if (indiceLed >= NUM_LEDS) break;
-      if (aquisicao::nivelAtual(canal1based)) {
-        ihm::controlarLED(indiceLed, 200, 0, 0, 30);
-      } else {
+
+      const bool nivel = aquisicao::nivelAtual(canal1based);
+      if (!ledsTesteCanaisPrecisamReescrever && nivel == nivelAnteriorLed[indiceLed])
+        continue;
+      nivelAnteriorLed[indiceLed] = nivel;
+
+      // Verde para nivel ALTO, vermelho para BAIXO — as mesmas cores que o
+      // aplicativo usa nesta tela (AppColors.levelHigh e o vermelho de
+      // erro, em lib/core/theme/app_colors.dart). Estavam invertidas em
+      // relacao ao app.
+      if (nivel) {
         ihm::controlarLED(indiceLed, 0, 150, 0, 30);
+      } else {
+        ihm::controlarLED(indiceLed, 200, 0, 0, 30);
       }
     }
+    ledsTesteCanaisPrecisamReescrever = false;
+  } else {
+    // Saiu da tela de teste: obriga a reescrever tudo quando voltar, senao
+    // o cache acharia que os LEDs ja estao na cor certa e eles ficariam
+    // apagados (voltarUmNivel() apaga a fita ao sair de TesteCanais).
+    forcarReescritaLedsTesteCanais();
   }
 
   if (estado.telaAtual == Tela::TesteCanais) {

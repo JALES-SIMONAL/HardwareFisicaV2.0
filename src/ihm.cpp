@@ -1521,6 +1521,16 @@ void desenharTecladoTexto(const char* rotuloCampo, const char* valorAtual,
   indiceSelecionadoAtual = indiceSelecionado;
   quantidadeItensAtual = quantidade;
 
+  // Limpa a area de conteudo INTEIRA antes de montar a grade.
+  //
+  // As teclas nao cobrem tudo: a ultima coluna quase nunca termina na borda
+  // (a largura util raramente e multiplo exato da celula) e a ultima linha
+  // idem. Sem esta limpeza, aquelas sobras ficavam com o desenho da tela
+  // anterior — os "resquicios" que apareciam nas telas de nome de arquivo e
+  // de senha. As demais telas nao precisam disto porque cada elemento delas
+  // pinta o proprio fundo cobrindo a linha inteira.
+  limparConteudo(false);
+
   char titulo[48];
   snprintf(titulo, sizeof(titulo), "%s: %s", rotuloCampo != nullptr ? rotuloCampo : "",
            valorAtual != nullptr ? valorAtual : "");

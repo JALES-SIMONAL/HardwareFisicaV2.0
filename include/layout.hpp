@@ -23,7 +23,11 @@ constexpr uint8_t UI_REFERENCE_ROTATION = 0;
 
 // Margens, cabeçalho/rodapé e espaçamento de referência (na resolução acima).
 constexpr int16_t UI_MARGIN = 4;
-constexpr int16_t UI_HEADER_HEIGHT = 28;
+// Reduzido de 28 para 20 junto com o aumento do alvo de toque: os botoes e
+// as linhas ficaram 30% mais altos, e sem devolver espaco em algum lugar
+// caberiam so 3 itens por tela. O cabecalho so precisa acomodar uma linha
+// de titulo, entao e de onde da para tirar sem custo de uso.
+constexpr int16_t UI_HEADER_HEIGHT = 20;
 constexpr int16_t UI_FOOTER_HEIGHT = 16;
 constexpr int16_t UI_LINE_SPACING = 12;
 

@@ -214,6 +214,61 @@ constexpr float UI_FONT_SIZE_MULTIPLICADOR = 1.0f;
 constexpr int16_t UI_ALTURA_MINIMA_ALVO_TOQUE = 32;
 
 // ---------------------------------------------------------------------
+// ORDEM DOS CANAIS DE COR DO PAINEL  <-- AJUSTE AQUI
+// ---------------------------------------------------------------------
+// Painel errado nas cores? Troque a linha UI_ORDEM_CANAIS abaixo e regrave.
+// Vale para TUDO: cores da interface e imagens BMP lidas do cartao, porque
+// as duas passam pela mesma funcao cor() logo adiante.
+//
+// Como descobrir a certa: copie docs/UFRN_teste_ordem.bmp para o cartao com
+// o nome UFRN.bmp e veja qual das seis celulas sai com as cores corretas —
+// o numero da celula e a ordem a escolher aqui. (Aumente antes o
+// BOOT_DURACAO_LOGO_UFRN_MS, mais abaixo, senao a tela passa rapido demais.)
+//
+// Por que isto vive aqui e nao no platformio.ini: a flag -DTFT_RGB_ORDER
+// tambem troca vermelho/azul, mas so isso — ela mexe no bit BGR do MADCTL
+// do controlador, que nao alcanca as outras quatro combinacoes. E, por ser
+// do TFT_eSPI, tem de ser build flag (a biblioteca e compilada separada e
+// nao enxerga este header). Deixe aquela flag em 0 e resolva tudo por aqui.
+enum class OrdemCanais : uint8_t { RGB, RBG, GRB, GBR, BRG, BGR };
+
+constexpr OrdemCanais UI_ORDEM_CANAIS = OrdemCanais::RGB;
+
+// ---------------------------------------------------------------------
+// Conversao 0xRRGGBB -> RGB565, aplicando a ordem escolhida
+// ---------------------------------------------------------------------
+// As cores sao escritas abaixo em hexadecimal de 24 bits, iguais aos do
+// tema do app, e convertidas em tempo de COMPILACAO — nao ha custo em
+// execucao. A mesma funcao e usada em execucao pelo leitor de BMP
+// (ihm.cpp), o que garante que imagem e interface nunca discordem.
+//
+// Funcao unica com ternarios encadeados de proposito: em C++11 um
+// constexpr precisa ser um unico return, e o projeto compila em gnu++11.
+constexpr uint8_t canalVermelho(uint32_t rgb) { return (rgb >> 16) & 0xFF; }
+constexpr uint8_t canalVerde(uint32_t rgb) { return (rgb >> 8) & 0xFF; }
+constexpr uint8_t canalAzul(uint32_t rgb) { return rgb & 0xFF; }
+
+// RGB565: 5 bits de vermelho, 6 de verde, 5 de azul. Os bits de baixo se
+// perdem, entao a cor na tela e uma aproximacao do hex de 24 bits.
+constexpr uint16_t empacotar565(uint8_t r, uint8_t g, uint8_t b) {
+  return static_cast<uint16_t>(((r & 0xF8) << 8) | ((g & 0xFC) << 3) | (b >> 3));
+}
+
+constexpr uint16_t cor(uint32_t rgb) {
+  return UI_ORDEM_CANAIS == OrdemCanais::RGB
+             ? empacotar565(canalVermelho(rgb), canalVerde(rgb), canalAzul(rgb))
+         : UI_ORDEM_CANAIS == OrdemCanais::RBG
+             ? empacotar565(canalVermelho(rgb), canalAzul(rgb), canalVerde(rgb))
+         : UI_ORDEM_CANAIS == OrdemCanais::GRB
+             ? empacotar565(canalVerde(rgb), canalVermelho(rgb), canalAzul(rgb))
+         : UI_ORDEM_CANAIS == OrdemCanais::GBR
+             ? empacotar565(canalVerde(rgb), canalAzul(rgb), canalVermelho(rgb))
+         : UI_ORDEM_CANAIS == OrdemCanais::BRG
+             ? empacotar565(canalAzul(rgb), canalVermelho(rgb), canalVerde(rgb))
+             : empacotar565(canalAzul(rgb), canalVerde(rgb), canalVermelho(rgb));
+}
+
+// ---------------------------------------------------------------------
 // PALETA — espelha o tema do aplicativo (repo meu_primeiro_app)
 // ---------------------------------------------------------------------
 // O app e Flutter/Material 3 e monta o tema inteiro a partir de tres cores
@@ -229,21 +284,16 @@ constexpr int16_t UI_ALTURA_MINIMA_ALVO_TOQUE = 32;
 // claro dele (#4FD8EE) — e o esquema escuro e o que faz sentido aqui, num
 // painel pequeno e retroiluminado. Por isso os valores abaixo sao os tons
 // escuros do MD3, nao as sementes cruas.
-//
-// Todos convertidos para RGB565 (5-6-5), que e o formato do painel: os 3
-// bits menos significativos do vermelho/azul e os 2 do verde se perdem na
-// conversao, entao a cor na tela e uma aproximacao — visivelmente a mesma,
-// mas nao identica ao hex do app.
-constexpr uint16_t UI_COR_SUPERFICIE = 0x08A2;        // #0E1415 fundo
-constexpr uint16_t UI_COR_CARTAO = 0x2986;            // #2B3133 fundo do item
-constexpr uint16_t UI_COR_CONTORNO = 0x3A49;          // #3F484A borda do item
-constexpr uint16_t UI_COR_TEXTO_PRINCIPAL = 0xDF1C;   // #DEE3E4
-constexpr uint16_t UI_COR_TEXTO_SECUNDARIO = 0xBE59;  // #BFC8CA
-constexpr uint16_t UI_COR_PRIMARIA = 0x4EDD;          // #4FD8EE ciano (tom escuro MD3)
-constexpr uint16_t UI_COR_SOBRE_PRIMARIA = 0x01A8;    // #003640 texto sobre o ciano
-constexpr uint16_t UI_COR_TERCIARIA = 0xF523;         // #F2A61C amarelo-banana
-constexpr uint16_t UI_COR_ERRO = 0xB123;              // #B3261E
-constexpr uint16_t UI_COR_SUCESSO = 0x2BE6;           // #2E7D32
+constexpr uint16_t UI_COR_SUPERFICIE = cor(0x0E1415);        // fundo
+constexpr uint16_t UI_COR_CARTAO = cor(0x2B3133);            // fundo do item
+constexpr uint16_t UI_COR_CONTORNO = cor(0x3F484A);          // borda do item
+constexpr uint16_t UI_COR_TEXTO_PRINCIPAL = cor(0xDEE3E4);
+constexpr uint16_t UI_COR_TEXTO_SECUNDARIO = cor(0xBFC8CA);
+constexpr uint16_t UI_COR_PRIMARIA = cor(0x4FD8EE);          // ciano (tom escuro MD3)
+constexpr uint16_t UI_COR_SOBRE_PRIMARIA = cor(0x003640);    // texto sobre o ciano
+constexpr uint16_t UI_COR_TERCIARIA = cor(0xF2A61C);         // amarelo-banana
+constexpr uint16_t UI_COR_ERRO = cor(0xB3261E);
+constexpr uint16_t UI_COR_SUCESSO = cor(0x2E7D32);
 
 // ---------------------------------------------------------------------
 // Papeis da IHM, mapeados na paleta acima

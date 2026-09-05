@@ -93,7 +93,7 @@ void desenharLogoMonkeyTech() {
   const int16_t altura = layout::uiHeight(layout::UI_REFERENCE_HEIGHT);
   if (!ihm::desenharImagemBMP("Monkey Tech.bmp", 0, 0, largura, altura)) {
     ihm::escreverTextoTela("Monkey Tech", layout::uiMargin(), layout::uiHeight(40),
-                            0xFFFF, layout::uiFontSize(1), true);
+                            UI_COR_TEXTO_PRINCIPAL, layout::uiFontSize(1), true);
   }
 }
 
@@ -108,9 +108,9 @@ void desenharLogoUFRN() {
 
 void desenharTelaDesenvolvedor() {
   ihm::escreverTextoTela("Desenvolvido por", layout::uiMargin(), layout::uiHeight(60),
-                          0xFFFF, layout::uiFontSize(1), true);
+                          UI_COR_TEXTO_PRINCIPAL, layout::uiFontSize(1), true);
   ihm::escreverTextoTela("Wilson Simonal", layout::uiMargin(), layout::uiHeight(76),
-                          0xFFE0, layout::uiFontSize(1), false);
+                          UI_COR_TERCIARIA, layout::uiFontSize(1), false);
 }
 
 // Usa ihm::controlarTodosLeds() (um único pixels.show() ao final) — nunca

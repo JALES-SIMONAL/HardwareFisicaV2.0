@@ -751,9 +751,9 @@ void init() {
   // caminho de ESCRITA (SPI, CS, DC, RST e backlight) está inteiro, e
   // qualquer problema seguinte é de geometria/driver, não de fiação.
   const int16_t faixa = tft.height() / 3;
-  tft.fillRect(0, 0, tft.width(), faixa, TFT_RED);
-  tft.fillRect(0, faixa, tft.width(), faixa, TFT_GREEN);
-  tft.fillRect(0, 2 * faixa, tft.width(), tft.height() - 2 * faixa, TFT_BLUE);
+  tft.fillRect(0, 0, tft.width(), faixa, cor(0xFF0000));
+  tft.fillRect(0, faixa, tft.width(), faixa, cor(0x00FF00));
+  tft.fillRect(0, 2 * faixa, tft.width(), tft.height() - 2 * faixa, cor(0x0000FF));
   delay(500);
   tft.fillScreen(COR_FUNDO);
 
@@ -1504,12 +1504,12 @@ void desenharGradeModulos(const char* titulo, uint8_t dimensao,
   const int16_t offsetX = (areaLargura - ladoGrade) / 2;
   const int16_t offsetY = layout::uiHeaderHeight() + (areaAltura - ladoGrade) / 2;
 
-  tft.fillRect(offsetX, offsetY, ladoGrade, ladoGrade, 0xFFFF);
+  tft.fillRect(offsetX, offsetY, ladoGrade, ladoGrade, cor(0xFFFFFF));
   for (uint8_t y = 0; y < dimensao; y++) {
     for (uint8_t x = 0; x < dimensao; x++) {
       if (modulo(x, y)) {
         tft.fillRect(offsetX + x * tamanhoCelula, offsetY + y * tamanhoCelula, tamanhoCelula,
-                     tamanhoCelula, 0x0000);
+                     tamanhoCelula, cor(0x000000));
       }
     }
   }
@@ -1917,12 +1917,14 @@ bool desenharImagemBMP(const char* nomeComExtensao, int16_t x, int16_t y, int16_
         int32_t colunaOrigemIdx = static_cast<int32_t>(colunaSaidaIdx * escala);
         if (colunaOrigemIdx >= larguraOrigem) colunaOrigemIdx = larguraOrigem - 1;
         const uint8_t* pixel = linhaOrigem + static_cast<uint32_t>(colunaOrigemIdx) * bytesPorPixel;
-        // BMP grava BGR(A); RGB565 = RRRRR GGGGGG BBBBB.
-        const uint8_t azul = pixel[0];
-        const uint8_t verde = pixel[1];
-        const uint8_t vermelho = pixel[2];
-        linhaSaida[colunaSaidaIdx] = static_cast<uint16_t>(((vermelho & 0xF8) << 8) |
-                                                            ((verde & 0xFC) << 3) | (azul >> 3));
+        // BMP grava os bytes em BGR(A). A conversao para RGB565 passa pela
+        // MESMA funcao cor() que a paleta da interface usa, entao a ordem
+        // escolhida em UI_ORDEM_CANAIS (MAIN.HPP) vale para a imagem
+        // tambem — imagem e interface nunca discordam de cor.
+        const uint32_t rgb = (static_cast<uint32_t>(pixel[2]) << 16) |
+                             (static_cast<uint32_t>(pixel[1]) << 8) |
+                             static_cast<uint32_t>(pixel[0]);
+        linhaSaida[colunaSaidaIdx] = cor(rgb);
       }
     }
 

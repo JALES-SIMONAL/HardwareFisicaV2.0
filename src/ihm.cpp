@@ -48,15 +48,18 @@ namespace ihm {
 
 namespace {
 
-constexpr uint16_t COR_FUNDO = 0x0000;
+// Fundo = "surface" do tema do app, nao preto puro: no MD3 escuro a
+// superficie e um cinza-azulado bem escuro, e o contraste do cartao
+// contra ela e o que da o relevo das listas.
+constexpr uint16_t COR_FUNDO = UI_COR_SUPERFICIE;
 // Cabeçalho, título e seleção vêm de MAIN.HPP (UI_COR_CABECALHO/
 // UI_COR_TEXTO_CABECALHO/UI_COR_SELECIONADO/UI_COR_TEXTO_SELECIONADO) —
 // ajustáveis ali sem precisar mexer neste arquivo.
 constexpr uint16_t COR_CABECALHO = UI_COR_CABECALHO;
 constexpr uint16_t COR_TITULO = UI_COR_TEXTO_CABECALHO;
-constexpr uint16_t COR_VALOR = 0xFFE0;
-constexpr uint16_t COR_RODAPE = 0xC618;
-constexpr uint16_t COR_TEXTO = 0xFFFF;
+constexpr uint16_t COR_VALOR = UI_COR_PRIMARIA;
+constexpr uint16_t COR_RODAPE = UI_COR_TEXTO_SECUNDARIO;
+constexpr uint16_t COR_TEXTO = UI_COR_TEXTO_PRINCIPAL;
 constexpr uint16_t COR_SELECIONADO = UI_COR_SELECIONADO;
 constexpr uint16_t COR_TEXTO_SELECIONADO = UI_COR_TEXTO_SELECIONADO;
 
@@ -104,9 +107,12 @@ constexpr uint16_t Z_TOQUE = 400;
 constexpr uint16_t Z_SOLTA = 250;
 
 // Tempo minimo entre dois toques aceitos. Touch resistivo tem repique
-// mecanico igual a uma chave: sem isto, um unico toque num item de lista
-// as vezes conta duas vezes (e a maquina de estados avanca duas telas).
-constexpr uint32_t DEBOUNCE_TOQUE_MS = 180;
+// mecanico igual a uma chave: sem isto, um unico toque as vezes conta duas
+// vezes. 60ms cobre o repique real do painel e nao atrapalha o ritmo de uso
+// — os 180ms anteriores eram folgados demais e apareciam como atraso, ainda
+// mais na selecao em dois toques, onde o SEGUNDO toque precisava esperar
+// esse tempo inteiro antes de ser aceito.
+constexpr uint32_t DEBOUNCE_TOQUE_MS = 60;
 
 // Duracao do bipe de retorno do toque. Curto de proposito: e a unica
 // confirmacao de que o toque foi registrado quando o dedo cobre o botao.
@@ -509,6 +515,27 @@ struct RotulosRodape {
   AcaoToque acaoProximo = AcaoToque::Proximo;
 };
 
+// Desenha o "card" de um item de lista: retangulo arredondado com borda,
+// equivalente ao Card + BorderedListTile do aplicativo. A area que responde
+// ao toque e a linha INTEIRA (mais alta e mais larga que o card); o recuo
+// serve de respiro entre cards e de folga para quem erra a mira um pouco
+// para fora da borda.
+void desenharCardItem(int16_t y, int16_t altura, bool selecionado) {
+  const int16_t x = UI_RECUO_BORDA_TOQUE;
+  const int16_t largura = tft.width() - 2 * UI_RECUO_BORDA_TOQUE;
+  const int16_t alturaCard = altura - 2 * UI_RECUO_BORDA_TOQUE;
+  const int16_t yCard = y + UI_RECUO_BORDA_TOQUE;
+
+  // Apaga a faixa inteira antes: o card e menor que a linha, e o que sobra
+  // em volta dele precisa voltar a ser fundo (senao fica o rastro do card
+  // anterior, que podia estar selecionado).
+  tft.fillRect(0, y, tft.width(), altura, COR_FUNDO);
+  tft.fillRoundRect(x, yCard, largura, alturaCard, UI_RAIO_CARTAO,
+                    selecionado ? UI_COR_SELECIONADO : UI_COR_CARTAO);
+  tft.drawRoundRect(x, yCard, largura, alturaCard, UI_RAIO_CARTAO,
+                    selecionado ? UI_COR_PRIMARIA : UI_COR_BORDA_TOQUE);
+}
+
 void desenharBotoesRodape(const RotulosRodape& rotulos, bool mostrarVoltar = true) {
   const int16_t largura = tft.width();
   const int16_t altura = tft.height();
@@ -536,12 +563,17 @@ void desenharBotoesRodape(const RotulosRodape& rotulos, bool mostrarVoltar = tru
       continue;
     }
 
-    tft.fillRect(x, y, larguraBotao - 1, alturaRodape, UI_COR_BOTAO);
-    tft.drawRect(x, y, larguraBotao - 1, alturaRodape, UI_COR_BORDA_TOQUE);
+    // OK (ultimo botao) no estilo FilledButton do app — e a acao
+    // primaria da tela; os demais no estilo OutlinedButton.
+    const bool primario = (i == 3);
+    const uint16_t corBotao = primario ? UI_COR_PRIMARIA : UI_COR_BOTAO;
+    tft.fillRoundRect(x + 2, y + 2, larguraBotao - 5, alturaRodape - 5, UI_RAIO_BOTAO, corBotao);
+    tft.drawRoundRect(x + 2, y + 2, larguraBotao - 5, alturaRodape - 5, UI_RAIO_BOTAO,
+                      primario ? UI_COR_PRIMARIA : UI_COR_BORDA_TOQUE);
 
     const int16_t larguraTexto = static_cast<int16_t>(std::strlen(textos[i]) * 6 * fonte);
     tft.setTextSize(fonte);
-    tft.setTextColor(UI_COR_TEXTO_BOTAO);
+    tft.setTextColor(primario ? UI_COR_SOBRE_PRIMARIA : UI_COR_TEXTO_BOTAO, corBotao);
     imprimirTexto(x + (larguraBotao - larguraTexto) / 2, y + (alturaRodape - 8 * fonte) / 2,
                   textos[i]);
 
@@ -557,11 +589,12 @@ void pintarZonaPressionada(const ZonaToque& z, bool pressionada) {
 
   const uint8_t fonte = layout::uiFontSize(1);
   const uint16_t corFundo = pressionada ? UI_COR_BOTAO_PRESSIONADO : UI_COR_BOTAO;
-  tft.fillRect(z.x, z.y, z.w - 1, z.h, corFundo);
-  tft.drawRect(z.x, z.y, z.w - 1, z.h, UI_COR_BORDA_TOQUE);
+  tft.fillRoundRect(z.x + 2, z.y + 2, z.w - 5, z.h - 5, UI_RAIO_BOTAO, corFundo);
+  tft.drawRoundRect(z.x + 2, z.y + 2, z.w - 5, z.h - 5, UI_RAIO_BOTAO,
+                    pressionada ? UI_COR_PRIMARIA : UI_COR_BORDA_TOQUE);
   const int16_t larguraTexto = static_cast<int16_t>(std::strlen(z.rotulo) * 6 * fonte);
   tft.setTextSize(fonte);
-  tft.setTextColor(pressionada ? UI_COR_TEXTO_SELECIONADO : UI_COR_TEXTO_BOTAO, corFundo);
+  tft.setTextColor(pressionada ? UI_COR_SOBRE_PRIMARIA : UI_COR_TEXTO_BOTAO, corFundo);
   imprimirTexto(z.x + (z.w - larguraTexto) / 2, z.y + (z.h - 8 * fonte) / 2, z.rotulo);
 }
 
@@ -621,9 +654,12 @@ bool lerToqueBruto(int16_t& x, int16_t& y) {
   uint16_t rx[3], ry[3];
   for (uint8_t i = 0; i < 3; i++) tft.getTouchRaw(&rx[i], &ry[i]);
 
-  // Reconfere a pressão depois de amostrar: descarta a borda de soltura,
-  // que é onde o XPT2046 devolve coordenada lixo.
-  if (tft.getTouchRawZ() < limiar) return false;
+  // A reconferencia de pressao (que descarta a borda de soltura, onde o
+  // XPT2046 devolve coordenada lixo) so e feita na DESCIDA do dedo. Durante
+  // o arrasto ela custava uma transacao SPI a cada leitura sem ganho: se o
+  // dedo ja esta na tela, uma amostra ruim isolada e absorvida pela mediana,
+  // e um ponto errado no meio de um arrasto nao aciona nada.
+  if (!tocando && tft.getTouchRawZ() < limiar) return false;
 
   uint16_t px = mediana3(rx[0], rx[1], rx[2]);
   uint16_t py = mediana3(ry[0], ry[1], ry[2]);
@@ -1180,19 +1216,19 @@ void desenharCabecalhoRodape(const char* titulo, const char* rodape) {
   const int16_t alturaRodape = layout::uiFooterHeight();
   const uint8_t fonte = layout::uiFontSize(1);
 
+  // Cabecalho PLANO, como a AppBar do app (elevation: 0, fundo =
+  // surface): a separacao vem da regua fina abaixo, nao de um bloco de
+  // cor. A versao anterior usava uma faixa laranja cheia.
   tft.fillRect(0, 0, largura, alturaCabecalho, COR_CABECALHO);
+  tft.drawFastHLine(0, alturaCabecalho - 1, largura, UI_COR_CONTORNO);
 
   if (titulo != nullptr) {
     char bufferTitulo[32];
     truncarTexto(bufferTitulo, sizeof(bufferTitulo), titulo,
                  largura - 2 * layout::uiMargin(), fonte);
-    // Título do cabeçalho sempre em maiúsculo — destaca "em que tela
-    // estou" — centralizado aqui em vez de escrever cada string de
-    // título já em maiúsculo em cada tela/chamador. Só ASCII simples
-    // (a-z); os títulos do firmware não usam acentos.
-    for (char* c = bufferTitulo; *c != '\0'; c++) {
-      if (*c >= 'a' && *c <= 'z') *c = static_cast<char>(*c - 'a' + 'A');
-    }
+    // Sem forcar maiusculas: a AppBar do app escreve o titulo em caixa
+    // normal, e o cabecalho aqui passou a ser plano como a dela — o
+    // destaque vem da regua e do peso do texto, nao do caixa alta.
     tft.setTextSize(fonte);
     tft.setTextColor(COR_TITULO);
     imprimirTexto(layout::uiMargin(), alturaCabecalho / 2 - 4 * fonte, bufferTitulo);
@@ -1255,28 +1291,34 @@ void desenharListaMenu(const char* titulo, const char* const* itens, uint8_t qua
     const int16_t y = yInicial + linha * alturaLinha;
     const bool selecionado = (indiceItem == indiceSelecionado);
 
-    // Toda linha pinta o próprio fundo, selecionada ou não: é o que
-    // dispensa o fillScreen e apaga o que estava ali antes.
-    const uint16_t corFundoLinha = selecionado ? COR_SELECIONADO : COR_FUNDO;
-    tft.fillRect(0, y - 1, tft.width(), alturaLinha, corFundoLinha);
-    // Contorno da area tocavel. Desenhado tambem no item selecionado: sem
-    // ele, o destaque preencheria a linha inteira e se perderia a referencia
-    // de onde uma linha termina e a seguinte comeca.
-    tft.drawRect(UI_RECUO_BORDA_TOQUE, y - 1 + UI_RECUO_BORDA_TOQUE,
-                 tft.width() - 2 * UI_RECUO_BORDA_TOQUE,
-                 alturaLinha - 2 * UI_RECUO_BORDA_TOQUE,
-                 selecionado ? COR_TEXTO_SELECIONADO : UI_COR_BORDA_TOQUE);
+    // Cada item e um CARD arredondado com borda, igual ao
+    // BorderedListTile do app (Card + ListTile + chevron_right). Isso
+    // resolve de uma vez a estetica e a delimitacao do alvo de toque: a
+    // borda do card E a fronteira da area que responde.
+    desenharCardItem(y - 1, alturaLinha, selecionado);
+
+    const int16_t xTexto = UI_RECUO_BORDA_TOQUE + layout::uiMargin();
+    // Reserva a direita para a seta ">" do item navegavel.
+    const int16_t larguraTextoDisponivel =
+        tft.width() - xTexto - UI_RECUO_BORDA_TOQUE - (UI_MOSTRAR_SETA_ITEM ? 12 * fonte : 0);
 
     char buffer[40];
-    truncarTexto(buffer, sizeof(buffer), itens[indiceItem],
-                 tft.width() - 2 * layout::uiMargin(), fonte);
+    truncarTexto(buffer, sizeof(buffer), itens[indiceItem], larguraTextoDisponivel, fonte);
 
+    const uint16_t corFundoLinha = selecionado ? COR_SELECIONADO : UI_COR_CARTAO;
     tft.setTextSize(fonte);
     tft.setTextColor(selecionado ? COR_TEXTO_SELECIONADO : COR_TEXTO, corFundoLinha);
-    // Centraliza o texto na altura da linha: a linha agora é bem mais alta
-    // que o texto (piso de toque, UI_ALTURA_MINIMA_ALVO_TOQUE), então
-    // escrever no topo dela deixaria o texto "colado" na linha de cima.
-    imprimirTexto(layout::uiMargin(), y + (alturaLinha - 8 * fonte) / 2, buffer);
+    // Centraliza o texto na altura da linha: a linha e bem mais alta que o
+    // texto (piso de toque, UI_ALTURA_MINIMA_ALVO_TOQUE), entao escrever no
+    // topo dela deixaria o texto colado na linha de cima.
+    imprimirTexto(xTexto, y + (alturaLinha - 8 * fonte) / 2, buffer);
+
+    if (UI_MOSTRAR_SETA_ITEM) {
+      tft.setTextColor(selecionado ? COR_TEXTO_SELECIONADO : UI_COR_TEXTO_SECUNDARIO,
+                       corFundoLinha);
+      imprimirTexto(tft.width() - UI_RECUO_BORDA_TOQUE - layout::uiMargin() - 6 * fonte,
+                    y + (alturaLinha - 8 * fonte) / 2, ">");
+    }
 
     registrarZona(0, y - 1, tft.width(), alturaLinha, AcaoToque::ItemLista, indiceItem);
     yFim = y - 1 + alturaLinha;
@@ -1315,18 +1357,12 @@ void desenharConfirmacao(const char* pergunta, uint8_t indiceSelecionado) {
   for (uint8_t i = 0; i < 2; i++) {
     const bool selecionado = (i == indiceSelecionado);
     const int16_t y = yOpcoes + i * alturaLinha;
-    const uint16_t corFundoLinha = selecionado ? COR_SELECIONADO : COR_FUNDO;
-    tft.fillRect(0, y - 1, tft.width(), alturaLinha, corFundoLinha);
-    // Contorno da area tocavel. Desenhado tambem no item selecionado: sem
-    // ele, o destaque preencheria a linha inteira e se perderia a referencia
-    // de onde uma linha termina e a seguinte comeca.
-    tft.drawRect(UI_RECUO_BORDA_TOQUE, y - 1 + UI_RECUO_BORDA_TOQUE,
-                 tft.width() - 2 * UI_RECUO_BORDA_TOQUE,
-                 alturaLinha - 2 * UI_RECUO_BORDA_TOQUE,
-                 selecionado ? COR_TEXTO_SELECIONADO : UI_COR_BORDA_TOQUE);
+    desenharCardItem(y - 1, alturaLinha, selecionado);
+    const uint16_t corFundoLinha = selecionado ? COR_SELECIONADO : UI_COR_CARTAO;
     tft.setTextSize(fonte);
     tft.setTextColor(selecionado ? COR_TEXTO_SELECIONADO : COR_TEXTO, corFundoLinha);
-    imprimirTexto(layout::uiMargin(), y + (alturaLinha - 8 * fonte) / 2, opcoes[i]);
+    imprimirTexto(UI_RECUO_BORDA_TOQUE + layout::uiMargin(),
+                  y + (alturaLinha - 8 * fonte) / 2, opcoes[i]);
     registrarZona(0, y - 1, tft.width(), alturaLinha, AcaoToque::ItemLista, i);
     yFim = y - 1 + alturaLinha;
   }
@@ -1532,12 +1568,14 @@ void desenharTecladoTexto(const char* rotuloCampo, const char* valorAtual,
     if (y + alturaCelula > yLimite) break;
 
     const bool selecionado = (i == indiceSelecionado);
-    const uint16_t corFundoCelula = selecionado ? COR_SELECIONADO : COR_FUNDO;
-    tft.fillRect(x, y, larguraCelula - 1, alturaCelula - 1, corFundoCelula);
-    // Contorno em TODAS as teclas (antes so nas nao selecionadas): e o que
-    // mostra o tamanho real do alvo de cada caractere.
-    tft.drawRect(x, y, larguraCelula - 1, alturaCelula - 1,
-                 selecionado ? COR_TEXTO_SELECIONADO : UI_COR_BORDA_TOQUE);
+    const uint16_t corFundoCelula = selecionado ? COR_SELECIONADO : UI_COR_CARTAO;
+    // Teclas arredondadas, no mesmo desenho dos cards da lista. Contorno
+    // em TODAS elas: e o que mostra o tamanho real do alvo de cada
+    // caractere.
+    tft.fillRoundRect(x + 1, y + 1, larguraCelula - 3, alturaCelula - 3, UI_RAIO_BOTAO,
+                      corFundoCelula);
+    tft.drawRoundRect(x + 1, y + 1, larguraCelula - 3, alturaCelula - 3, UI_RAIO_BOTAO,
+                      selecionado ? UI_COR_PRIMARIA : UI_COR_BORDA_TOQUE);
     tft.setTextColor(selecionado ? COR_TEXTO_SELECIONADO : COR_TEXTO, corFundoCelula);
     const int16_t larguraTexto = static_cast<int16_t>(std::strlen(rotulos[i]) * 6 * fonte);
     imprimirTexto(x + (larguraCelula - larguraTexto) / 2, y + (alturaCelula - 8 * fonte) / 2,
@@ -1786,19 +1824,19 @@ bool desenharImagemBMP(const char* nomeComExtensao, int16_t x, int16_t y, int16_
     return false;
   }
 
-  // Escala uniforme, preservando a proporção — AMPLIA quando a imagem é
-  // menor que a área disponível, ao contrário da versão anterior, que só
-  // reduzia. Com as logos de boot (160x128 e 164x52) numa tela de 320x240,
-  // "nunca ampliar" significava desenhá-las no tamanho original: um quarto
-  // da tela e um oitavo dela, respectivamente.
+  // TAMANHO ORIGINAL, 1:1 — a imagem so e reduzida se nao couber na caixa.
   //
-  // escala < 1 amplia, > 1 reduz. Toma-se o MAIOR dos dois fatores para a
-  // imagem caber inteira na caixa (o menor a faria transbordar no outro
-  // eixo).
+  // Ampliar por vizinho-mais-proximo (o unico metodo viavel aqui) nao cria
+  // detalhe: duplica pixels, e o resultado e uma logo maior porem serrilhada
+  // e borrada. Como as logos ja vem no tamanho que o projeto quer
+  // (160x128 e 164x52), desenha-las 1:1 e o que preserva a nitidez.
+  //
+  // escala > 1 reduz; 1.0 desenha pixel a pixel. Para ocupar mais tela, o
+  // caminho certo e exportar o BMP maior, nao ampliar aqui.
   const float escalaLargura = static_cast<float>(larguraOrigem) / larguraMaxima;
   const float escalaAltura = static_cast<float>(alturaOrigem) / alturaMaxima;
   float escala = (escalaLargura > escalaAltura) ? escalaLargura : escalaAltura;
-  if (escala <= 0.0f) escala = 1.0f;
+  if (escala < 1.0f) escala = 1.0f;  // nunca amplia
 
   int16_t larguraSaida = static_cast<int16_t>(larguraOrigem / escala);
   int16_t alturaSaida = static_cast<int16_t>(alturaOrigem / escala);

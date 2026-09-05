@@ -213,52 +213,78 @@ constexpr float UI_FONT_SIZE_MULTIPLICADOR = 1.0f;
 // em volta. Custo: menos itens por tela, mais rolagem.
 constexpr int16_t UI_ALTURA_MINIMA_ALVO_TOQUE = 32;
 
-// Cor (RGB565, formato 5-6-5) do cabeçalho de cada tela — a faixa que
-// mostra o título do menu/tela atual — e da barra de preenchimento de
-// valores editáveis (brilho, volume, repetições...).
-constexpr uint16_t UI_COR_CABECALHO = 0xFD20;  // laranja (#FFA500)
-
-// Cor (RGB565) do texto do título, desenhado por cima de UI_COR_CABECALHO —
-// precisa contrastar com ela (preto contrasta melhor que branco com o
-// laranja acima).
-constexpr uint16_t UI_COR_TEXTO_CABECALHO = 0x0000;  // preto
-
-// Cor (RGB565) do fundo do item atualmente selecionado numa lista/menu/
-// teclado de texto. Deliberadamente diferente de UI_COR_CABECALHO acima,
-// para dar pra distinguir de relance "em que tela estou" (cabeçalho) de
-// "qual item está selecionado" (destaque da lista).
-constexpr uint16_t UI_COR_SELECIONADO = 0xFD20;  // laranja (#FFA500)
-
-// Cor (RGB565) do texto do item selecionado, desenhado por cima de
-// UI_COR_SELECIONADO — precisa contrastar com ela.
-constexpr uint16_t UI_COR_TEXTO_SELECIONADO = 0x0000;  // preto
-
-// Cor (RGB565) de fundo dos botoes de toque desenhados no rodape (Voltar,
-// -, +, OK). Nao existia na main — la o rodape era so um texto de dica
-// ("Gire para ajustar, KEY confirma"), porque nao havia onde tocar.
-constexpr uint16_t UI_COR_BOTAO = 0x39E7;         // cinza medio
-constexpr uint16_t UI_COR_TEXTO_BOTAO = 0xFFFF;   // branco
-
-// Cor (RGB565) do contorno que delimita TODA area tocavel — item de lista,
-// opcao de confirmacao, tecla do teclado e botao do rodape.
+// ---------------------------------------------------------------------
+// PALETA — espelha o tema do aplicativo (repo meu_primeiro_app)
+// ---------------------------------------------------------------------
+// O app e Flutter/Material 3 e monta o tema inteiro a partir de tres cores
+// semente tiradas do logo (lib/core/theme/app_colors.dart):
 //
-// Nao existia na versao com encoder e nao faria sentido la: com o giro, a
-// area de um item era irrelevante, o que importava era qual estava
-// destacado. Com toque, o usuario precisa saber ONDE encostar antes de
-// encostar — sem o contorno, um item nao selecionado e so um texto solto no
-// preto, e nao ha como adivinhar que a faixa clicavel vai de ponta a ponta
-// da tela e e mais alta que a letra.
-constexpr uint16_t UI_COR_BORDA_TOQUE = 0x4A69;  // cinza escuro
+//   primary   #04BBD3  ciano/teal do corpo do macaco
+//   secondary #1B3A6B  azul-marinho dos contornos
+//   tertiary  #F2A61C  amarelo-banana de destaque
+//   error     #B3261E  |  nivel logico alto  #2E7D32
+//
+// Como o MD3 gera uma escala tonal a partir da semente, o valor de
+// "primary" no ESQUEMA ESCURO nao e o proprio #04BBD3 e sim um tom mais
+// claro dele (#4FD8EE) — e o esquema escuro e o que faz sentido aqui, num
+// painel pequeno e retroiluminado. Por isso os valores abaixo sao os tons
+// escuros do MD3, nao as sementes cruas.
+//
+// Todos convertidos para RGB565 (5-6-5), que e o formato do painel: os 3
+// bits menos significativos do vermelho/azul e os 2 do verde se perdem na
+// conversao, entao a cor na tela e uma aproximacao — visivelmente a mesma,
+// mas nao identica ao hex do app.
+constexpr uint16_t UI_COR_SUPERFICIE = 0x08A2;        // #0E1415 fundo
+constexpr uint16_t UI_COR_CARTAO = 0x2986;            // #2B3133 fundo do item
+constexpr uint16_t UI_COR_CONTORNO = 0x3A49;          // #3F484A borda do item
+constexpr uint16_t UI_COR_TEXTO_PRINCIPAL = 0xDF1C;   // #DEE3E4
+constexpr uint16_t UI_COR_TEXTO_SECUNDARIO = 0xBE59;  // #BFC8CA
+constexpr uint16_t UI_COR_PRIMARIA = 0x4EDD;          // #4FD8EE ciano (tom escuro MD3)
+constexpr uint16_t UI_COR_SOBRE_PRIMARIA = 0x01A8;    // #003640 texto sobre o ciano
+constexpr uint16_t UI_COR_TERCIARIA = 0xF523;         // #F2A61C amarelo-banana
+constexpr uint16_t UI_COR_ERRO = 0xB123;              // #B3261E
+constexpr uint16_t UI_COR_SUCESSO = 0x2BE6;           // #2E7D32
 
-// Recuo (px) do contorno para dentro da area tocavel. A area que RESPONDE
-// ao toque e de proposito um pouco maior que o retangulo desenhado: erra-se
-// mais para fora da borda do que para dentro, entao a folga trabalha a
-// favor de quem mira.
-constexpr int16_t UI_RECUO_BORDA_TOQUE = 2;
-// Cor do botao enquanto o dedo esta em cima dele (retorno visual imediato
-// do toque — com encoder isso nao fazia sentido, com touch e essencial:
-// sem ele o usuario nao sabe se o toque foi registrado).
-constexpr uint16_t UI_COR_BOTAO_PRESSIONADO = 0xFD20;
+// ---------------------------------------------------------------------
+// Papeis da IHM, mapeados na paleta acima
+// ---------------------------------------------------------------------
+// O cabecalho deixou de ser uma faixa laranja e passou a ser plano, como a
+// AppBar do app (backgroundColor: colorScheme.surface, elevation: 0) — a
+// separacao vem de uma regua fina, nao de um bloco de cor.
+constexpr uint16_t UI_COR_CABECALHO = UI_COR_SUPERFICIE;
+constexpr uint16_t UI_COR_TEXTO_CABECALHO = UI_COR_TEXTO_PRINCIPAL;
+
+// Item selecionado: preenchido com a primaria, texto escuro por cima —
+// equivalente ao FilledButton/indicador do app. Trocou o laranja sobre
+// preto da versao anterior.
+constexpr uint16_t UI_COR_SELECIONADO = UI_COR_PRIMARIA;
+constexpr uint16_t UI_COR_TEXTO_SELECIONADO = UI_COR_SOBRE_PRIMARIA;
+
+// Botoes do rodape no estilo OutlinedButton do app: fundo do cartao,
+// contorno visivel, texto claro.
+constexpr uint16_t UI_COR_BOTAO = UI_COR_CARTAO;
+constexpr uint16_t UI_COR_TEXTO_BOTAO = UI_COR_TEXTO_PRINCIPAL;
+constexpr uint16_t UI_COR_BOTAO_PRESSIONADO = UI_COR_PRIMARIA;
+
+// Contorno que delimita toda area tocavel — o mesmo papel do outlineVariant
+// que o Card do app usa em BorderedListTile.
+constexpr uint16_t UI_COR_BORDA_TOQUE = UI_COR_CONTORNO;
+
+// Recuo (px) do cartao dentro da area tocavel. A area que RESPONDE ao toque
+// e de proposito um pouco maior que o cartao desenhado: erra-se mais para
+// fora da borda do que para dentro, entao a folga trabalha a favor de quem
+// mira. Tambem e o "margin: bottom 8" entre cards do app.
+constexpr int16_t UI_RECUO_BORDA_TOQUE = 3;
+
+// Raio dos cantos arredondados. O app usa 20 em Card e 14 em botao, sobre
+// uma tela de celular; reduzido proporcionalmente para os 320px daqui.
+constexpr int16_t UI_RAIO_CARTAO = 7;
+constexpr int16_t UI_RAIO_BOTAO = 5;
+
+// Marcador ">" a direita de cada item navegavel — o trailing padrao do
+// BorderedListTile do app (Icons.chevron_right), que sinaliza "isto abre
+// outra tela".
+constexpr bool UI_MOSTRAR_SETA_ITEM = true;
 
 // Quando true, todo texto da IHM local é desenhado duas vezes — a segunda
 // com 1px de deslocamento horizontal — pra simular negrito ("double

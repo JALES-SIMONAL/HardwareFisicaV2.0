@@ -1,0 +1,73 @@
+#pragma once
+
+#include <stdint.h>
+
+// Vocabulário de comandos compartilhado entre a entrada local (tela touch
+// KEY) e a entrada remota (Bluetooth). Ambas as origens convertem sua
+// entrada para o mesmo Command e chamam a mesma função da máquina de
+// estados — não existe lógica de funcionamento separada para o aplicativo.
+namespace comandos {
+
+// Modo de borda considerado válido para registro de um canal de sensor.
+enum class EdgeMode : uint8_t {
+  Falling = 0,    // H para L
+  Rising = 1,     // L para H
+  Both = 2,       // ambas
+  Disabled = 3    // canal ignorado por completo (nenhum evento registrado)
+};
+
+enum class CommandType : uint8_t {
+  None = 0,
+  Next,               // giro horário: próxima opção / incrementar valor
+  Previous,           // giro anti-horário: opção anterior / decrementar valor
+  Confirm,            // clique da tecla KEY / confirmar no app
+  Back,               // voltar / cancelar edição
+  StartExperiment,
+  StopExperiment,
+  CancelExperiment,
+  FinishRepetition,
+  RestartRepetition,  // descarta so os eventos da repeticao atual (nao finalizada) e reinicia ela
+  SetRepetitionCount,
+  SetChannelMode,
+  SetAllChannelsMode,
+  RestoreChannelDefaults,
+  SetBrightness,
+  SetVolume,
+  SetOperationMode,
+  SelectFile,
+  RenameFile,
+  DeleteFile,
+  DeleteAllFiles,
+  SaveMeasurementName,
+  Reconnect,
+  ListFiles,
+  LoadRepetition,
+  GetChannels,
+  ReadFileData,
+  SetDeviceName,
+  SetDateTime,        // epoch UTC (segundos) enviado pelo app ao conectar
+  SetDataAnalysisEnabled,
+  SetPassword,
+  // Entrar/sair da tela de teste de canais a partir do app: sem ela, o app
+  // recebia os níveis (via "teste_canais") mas os NeoPixels físicos nunca
+  // acendiam, porque quem os aciona é atualizarTelasAoVivo() em
+  // maquina_estados.cpp, condicionado só à tela LOCAL — ver
+  // testeCanaisAtivoRemoto.
+  SetChannelTestActive
+};
+
+enum class Origem : uint8_t { Local, Bluetooth };
+
+// Estrutura mínima e genérica: cada CommandType usa só os campos relevantes.
+struct Command {
+  CommandType tipo = CommandType::None;
+  int32_t valor = 0;        // deltas de navegação, brilho/volume, repetições...
+  uint8_t canal = 0;        // índice do canal (1..NUM_CHANNELS) quando aplicável
+  EdgeMode modo = EdgeMode::Both;
+  // 25 = maior nome de arquivo possível (20 digitáveis no editor da IHM +
+  // ".csv" + '\0' — ver comentário em armazenamento::InfoArquivo::nome).
+  char texto[25] = "";       // nome de arquivo/valor textual quando aplicável
+  char texto2[25] = "";      // segundo texto (só RenameFile: nome novo)
+};
+
+}  // namespace comandos

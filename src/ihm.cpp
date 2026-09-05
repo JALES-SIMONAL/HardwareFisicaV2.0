@@ -648,6 +648,7 @@ void init() {
   Serial.printf("[DISPLAY] TFT_SCLK: %d | TFT_MOSI: %d | TFT_MISO: %d | TOUCH_CS: %d\n", TFT_SCLK,
                 TFT_MOSI, TFT_MISO, TOUCH_CS);
 
+  Serial.println("[IHM] 1/7 buzzer"); Serial.flush();
   pinMode(BUZZER_PIN, OUTPUT);
   // Tira o tone() do canal LEDC 0 (padrão dele) antes de qualquer beep —
   // ver o comentário em BRILHO_PWM_CANAL. Sem isto, o primeiro beep rouba
@@ -678,8 +679,10 @@ void init() {
   Serial.printf("[DISPLAY] SD desselecionado (pino %d em HIGH) antes de iniciar o painel\n",
                 SD_CS_PIN);
 
+  Serial.println("[IHM] 2/7 tft.init()"); Serial.flush();
   tft.init();
   tft.setRotation(ROTACAO_DISPLAY);
+  Serial.println("[IHM] 3/7 painel iniciado"); Serial.flush();
 
   // O ID do controlador é lido só para DIAGNÓSTICO, e nunca para decidir se
   // a tela existe.
@@ -718,6 +721,7 @@ void init() {
   delay(500);
   tft.fillScreen(COR_FUNDO);
 
+  Serial.println("[IHM] 4/7 lendo calibracao do toque na NVS"); Serial.flush();
   // ---- Calibração do touch ----
   prefsToque.begin("ihm", true);
   const uint32_t assinaturaSalva = prefsToque.getULong("sigtoque", 0);
@@ -739,6 +743,7 @@ void init() {
     calibrarToque();
   }
 
+  Serial.println("[IHM] 5/7 PWM do backlight"); Serial.flush();
   if (FORCE_DISPLAY_BACKLIGHT_DIAGNOSTIC) {
     // NÃO anexa o pino ao LEDC: ledcAttachPin() assume o controle do
     // estágio de saída do GPIO e zera o duty até o primeiro ledcWrite(),
@@ -751,11 +756,12 @@ void init() {
   setBrilho(BRILHO_NIVEL_MAXIMO);
 
   Serial.printf("[LEDS] Inicializando NeoPixel (GPIO %d, %d LEDs)\n", PIN_NEO, NUM_LEDS);
+  Serial.println("[IHM] 6/7 NeoPixel"); Serial.flush();
   pixels.begin();
   pixels.clear();
   pixels.show();
 
-  Serial.println("[DISPLAY] Inicializacao concluida");
+  Serial.println("[IHM] 7/7 concluido"); Serial.flush();
 }
 
 bool displayDisponivel() { return displayOk; }

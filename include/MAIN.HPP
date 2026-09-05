@@ -232,7 +232,12 @@ constexpr int16_t UI_ALTURA_MINIMA_ALVO_TOQUE = 32;
 // nao enxerga este header). Deixe aquela flag em 0 e resolva tudo por aqui.
 enum class OrdemCanais : uint8_t { RGB, RBG, GRB, GBR, BRG, BGR };
 
-constexpr OrdemCanais UI_ORDEM_CANAIS = OrdemCanais::RGB;
+// MEDIDO NESTE PAINEL: com a constante em RGB, as faixas de cor do boot
+// saiam AZUL / VERDE / VERMELHO de cima para baixo, quando o firmware
+// desenha vermelho / verde / azul. O verde no lugar certo prova que e uma
+// troca pura entre os canais das pontas (no RGB565 o verde e o campo do
+// meio, e uma inversao R<->B nao o move) — ou seja, o painel e BGR.
+constexpr OrdemCanais UI_ORDEM_CANAIS = OrdemCanais::BGR;
 
 // ---------------------------------------------------------------------
 // Conversao 0xRRGGBB -> RGB565, aplicando a ordem escolhida

@@ -196,12 +196,6 @@ struct ZonaToque {
   int16_t x = 0, y = 0, w = 0, h = 0;
   AcaoToque acao = AcaoToque::Nenhuma;
   uint8_t indice = 0;
-  // true = um toque só já confirma, sem precisar do segundo. Usado no
-  // teclado de texto: ali cada célula é um caractere, o alvo é grande, e a
-  // consequência de errar é apagar uma letra — não faz sentido cobrar dois
-  // toques por caractere digitado. Nas listas de menu continua false,
-  // porque lá o item errado pode ser "Excluir tudo".
-  bool confirmaDireto = false;
   // Rótulo do botão, para repintá-lo no estado pressionado sem ter que
   // deduzir o texto a partir da ação (o mesmo botão físico é "^" numa tela
   // e "-" em outra).
@@ -253,8 +247,7 @@ void limparZonas() {
 }
 
 void registrarZona(int16_t x, int16_t y, int16_t w, int16_t h, AcaoToque acao,
-                   uint8_t indice = 0, bool confirmaDireto = false,
-                   const char* rotulo = "") {
+                   uint8_t indice = 0, const char* rotulo = "") {
   if (quantidadeZonas >= MAX_ZONAS) return;
   // Campo a campo em vez de inicialização por chaves: o projeto compila em
   // gnu++11, e nesse padrão um struct com inicializadores de membro
@@ -267,7 +260,6 @@ void registrarZona(int16_t x, int16_t y, int16_t w, int16_t h, AcaoToque acao,
   z.h = h;
   z.acao = acao;
   z.indice = indice;
-  z.confirmaDireto = confirmaDireto;
   z.rotulo = rotulo;
   quantidadeZonas++;
 }
@@ -577,7 +569,7 @@ void desenharBotoesRodape(const RotulosRodape& rotulos, bool mostrarVoltar = tru
     imprimirTexto(x + (larguraBotao - larguraTexto) / 2, y + (alturaRodape - 8 * fonte) / 2,
                   textos[i]);
 
-    registrarZona(x, y, larguraBotao, alturaRodape, acoes[i], 0, false, textos[i]);
+    registrarZona(x, y, larguraBotao, alturaRodape, acoes[i], 0, textos[i]);
   }
 }
 
@@ -598,43 +590,34 @@ void pintarZonaPressionada(const ZonaToque& z, bool pressionada) {
   imprimirTexto(z.x + (z.w - larguraTexto) / 2, z.y + (z.h - 8 * fonte) / 2, z.rotulo);
 }
 
-// Toque num item de lista, em DOIS TEMPOS:
-//   1o toque num item que NÃO está selecionado -> só move o cursor até ele
-//                                                 (rajada de passos), sem ativar;
-//   toque num item que JÁ está selecionado     -> confirma.
+// Move o cursor ate o item tocado, sem ativar nada.
 //
-// Ou seja: um toque num item novo é sempre inofensivo, e só o segundo toque
-// — agora sobre um item visivelmente destacado — executa a ação. Isso é o
-// que dá chance de corrigir a mira antes de acionar qualquer coisa, que num
-// touch resistivo com dedo adulto acontece o tempo todo. O preço é um toque
-// a mais por escolha; a alternativa (ativar no primeiro toque) executa
-// ações erradas e algumas são destrutivas — excluir arquivo, cancelar
-// experimento em andamento.
+// MODELO DE INTERACAO: pressionar move, soltar aciona.
+//   - ao encostar o dedo num item, o cursor pula para ele na hora (esta
+//     funcao) — o usuario ve o destaque sob o proprio dedo;
+//   - ao soltar sobre o mesmo item, ele e confirmado;
+//   - ao arrastar para fora antes de soltar, nada e acionado, e o cursor
+//     fica onde parou.
 //
-// A tradução para o vocabulário da máquina de estados continua a mesma: só
-// mudou onde entra o Confirmar. Ver ihm.hpp.
-void enfileirarSaltoParaItem(uint8_t destino, bool confirmaDireto) {
-  if (destino == indiceSelecionadoAtual) {
-    enfileirar(EventoFila::Confirmar);
-    return;
-  }
+// Substituiu a selecao em dois toques da versao anterior. Ela protegia
+// contra erro de mira, mas ao custo de um toque a mais em CADA escolha; o
+// modelo atual da a mesma protecao de graca, porque o destaque aparece
+// enquanto o dedo ainda esta na tela e ha tempo de arrastar para fora se o
+// alvo estiver errado. E e o comportamento que qualquer interface de toque
+// tem, entao nao precisa ser aprendido.
+//
+// A traducao para o vocabulario da maquina de estados continua a mesma:
+// uma rajada de Proximo/Anterior, drenada inteira no mesmo tick (ver o laco
+// em maquina_estados::tick()), o que faz o cursor SALTAR para o item em vez
+// de andar item por item.
+void enfileirarMoverParaItem(uint8_t destino) {
+  if (destino == indiceSelecionadoAtual) return;
 
   if (destino > indiceSelecionadoAtual) {
     for (uint8_t i = indiceSelecionadoAtual; i < destino; i++) enfileirar(EventoFila::Proximo);
   } else {
     for (uint8_t i = destino; i < indiceSelecionadoAtual; i++) enfileirar(EventoFila::Anterior);
   }
-
-  // Nas listas de menu, sem Confirmar aqui: o cursor só andou, e quem
-  // confirma é o toque seguinte. No teclado de texto, confirmaDireto é
-  // true e o caractere sai no primeiro toque.
-  if (confirmaDireto) enfileirar(EventoFila::Confirmar);
-
-  // Todos os passos acima são consumidos NO MESMO tick pela máquina de
-  // estados (ver o laço em maquina_estados::tick()), então o cursor aparece
-  // direto no item tocado — sem a animação de "andar item por item" que a
-  // primeira versão deste porte tinha, herdada do jeito como o encoder
-  // entregava um passo por vez.
 }
 
 // Leitura crua do XPT2046 com mediana de 3 amostras. Mediana em vez de
@@ -872,8 +855,17 @@ void atualizarToque() {
       zonaPressionada = zonas[i];
       temZonaPressionada = true;
       beep(BEEP_TOQUE_MS);
-      TravaBarramentoDisplay travaBus;
-      pintarZonaPressionada(zonaPressionada, true);
+
+      // Item de lista: o cursor vai para ele JA na descida do dedo, para o
+      // destaque aparecer sob o dedo enquanto ele ainda esta na tela. A
+      // ativacao so acontece ao soltar.
+      if (zonaPressionada.acao == AcaoToque::ItemLista) {
+        enfileirarMoverParaItem(zonaPressionada.indice);
+      } else {
+        // Botoes do rodape nao movem cursor: so acendem, e agem ao soltar.
+        TravaBarramentoDisplay travaBus;
+        pintarZonaPressionada(zonaPressionada, true);
+      }
       break;
     }
   } else if (agora && tocando) {
@@ -935,7 +927,7 @@ void atualizarToque() {
         virouGesto && dx > LIMIAR_DESLIZE_VOLTAR_PX && abs(dx) > 2 * abs(dy);
 
     if (temZonaPressionada) {
-      {
+      if (zonaPressionada.acao != AcaoToque::ItemLista) {
         TravaBarramentoDisplay travaBus;
         pintarZonaPressionada(zonaPressionada, false);
       }
@@ -948,7 +940,10 @@ void atualizarToque() {
         ultimoToqueAceitoMs = ms;
         switch (zonaPressionada.acao) {
           case AcaoToque::ItemLista:
-            enfileirarSaltoParaItem(zonaPressionada.indice, zonaPressionada.confirmaDireto);
+            // O cursor ja foi movido na descida; soltar sobre o item so
+            // confirma. Se a rajada de movimento ainda estiver na fila, o
+            // Confirmar entra depois dela e e consumido na ordem certa.
+            enfileirar(EventoFila::Confirmar);
             break;
           case AcaoToque::Confirmar:
             enfileirar(EventoFila::Confirmar);
@@ -1581,11 +1576,7 @@ void desenharTecladoTexto(const char* rotuloCampo, const char* valorAtual,
     imprimirTexto(x + (larguraCelula - larguraTexto) / 2, y + (alturaCelula - 8 * fonte) / 2,
                   rotulos[i]);
 
-    // confirmaDireto = true: no teclado, um toque ja digita o caractere.
-    // Cobrar dois toques por letra tornaria digitar um nome de arquivo
-    // insuportavel, e o custo de errar aqui e apagar uma letra — nada
-    // parecido com o de errar um item de menu.
-    registrarZona(x, y, larguraCelula, alturaCelula, AcaoToque::ItemLista, i, true);
+    registrarZona(x, y, larguraCelula, alturaCelula, AcaoToque::ItemLista, i);
     ultimaLinhaY = y + alturaCelula;
   }
 

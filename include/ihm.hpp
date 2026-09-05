@@ -56,27 +56,23 @@ void escreverTextoTela(const char* texto, int16_t x = 10, int16_t y = 10,
 // reescrita, e o controle pelo aplicativo Bluetooth continua entrando pelo
 // mesmo caminho.
 //
-// SELEÇÃO EM DOIS TEMPOS (duplo toque), COM UMA EXCEÇÃO
+// PRESSIONAR MOVE, SOLTAR ACIONA
 //
-//   1o toque num item que não está selecionado -> só move o cursor até ele;
-//   toque num item que já está selecionado     -> confirma.
+//   - encostar o dedo num item  -> o cursor pula para ele na hora;
+//   - soltar sobre o mesmo item -> confirma;
+//   - arrastar para fora antes de soltar -> nao aciona nada, e o cursor
+//     fica onde parou.
 //
-// Um toque num item novo é, portanto, sempre inofensivo: ele apenas
-// destaca. Só o segundo toque, já sobre um item visivelmente selecionado,
-// executa a ação. Isso existe porque errar a mira num touch resistivo é
-// rotina, e várias ações do firmware são destrutivas (excluir arquivo,
-// cancelar experimento em andamento) — o custo de um toque a mais por
-// escolha é pequeno perto de executar a ação errada. O botão OK do rodapé
-// confirma direto, para quem já está com o item certo selecionado.
-//
-// A EXCEÇÃO é o teclado de texto (desenharTecladoTexto): ali cada célula é
-// um caractere e um único toque já digita. Cobrar dois toques por letra
-// tornaria escrever um nome de arquivo insuportável, e o custo de errar é
-// apagar uma letra — nada parecido com o de errar um item de menu.
+// Substituiu a selecao em dois toques. Ela protegia contra erro de mira,
+// mas cobrava um toque a mais em CADA escolha; este modelo da a mesma
+// protecao de graca, porque o destaque aparece enquanto o dedo ainda esta
+// na tela e da tempo de arrastar para fora se o alvo estiver errado. E e o
+// comportamento que qualquer interface de toque tem, entao nao precisa ser
+// aprendido.
 //
 // O cursor SALTA para o item tocado, sem passar pelos itens do meio: a
-// máquina de estados drena todos os passos no mesmo tick e só então
-// redesenha (ver o laço em maquina_estados::tick()).
+// maquina de estados drena todos os passos no mesmo tick e so entao
+// redesenha (ver o laco em maquina_estados::tick()).
 //
 // ---------------------------------------------------------------------
 // GESTOS

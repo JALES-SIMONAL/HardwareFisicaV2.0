@@ -2774,7 +2774,91 @@ void tick() {
   }
 }
 
+// Diz se a tela cuida do comando Back por conta propria (ou se ele deve
+// ser ignorado nela). Para todas as outras, processarComando() aplica o
+// comportamento generico: voltar um nivel.
+//
+// POR QUE ISTO EXISTE: com o encoder nao havia como emitir Back — so o
+// Bluetooth emitia, e so 16 dos 39 tratadores de tela chegaram a trata-lo.
+// Quando o toque ganhou o botao "<" do rodape, ele passou a emitir Back em
+// TODAS as telas, e nas outras 23 o comando chegava e ninguem agia: o botao
+// simplesmente nao fazia nada. Este switch fecha esse buraco sem mexer nos
+// tratadores que ja tem logica propria de Back.
+//
+// E um switch exaustivo de proposito, sem "default": se alguem acrescentar
+// uma tela ao enum, o compilador avisa (-Wswitch) que ela precisa de uma
+// decisao aqui, em vez de herdar um comportamento silencioso.
+bool telaCuidaDoBack(Tela tela) {
+  switch (tela) {
+    // Raiz da navegacao: nao ha nivel acima para onde voltar.
+    case Tela::Boot:
+    case Tela::MenuPrincipal:
+      return true;
+
+    // Experimento EM ANDAMENTO. Voltar daqui abandonaria uma medicao em
+    // curso sem confirmacao — o caminho de saida e o item de cancelamento,
+    // que passa pela tela de confirmacao.
+    case Tela::ExperimentoExecucao:
+      return true;
+
+    // Telas cujo proprio tratador ja implementa Back.
+    case Tela::Manual:
+    case Tela::Sobre:
+    case Tela::SenhaValidar:
+    case Tela::ExperimentoRepeticoes:
+    case Tela::ExperimentoNomeArquivo:
+    case Tela::TesteCanais:
+    case Tela::GerenciamentoArquivos:
+    case Tela::ArquivoRenomear:
+    case Tela::ArquivoDados:
+    case Tela::ConexaoAppRenomear:
+    case Tela::AnaliseSelecionarArquivo:
+    case Tela::AnaliseTipo:
+    case Tela::AnaliseLinearDistancia:
+    case Tela::AnaliseLinearResultado:
+    case Tela::AnaliseLinearEscolherRepeticao:
+    case Tela::AnaliseLinearGrafico:
+    case Tela::AnaliseCircularRaioVaos:
+    case Tela::AnaliseCircularResultado:
+    case Tela::AnaliseCircularEscolherRepeticao:
+    case Tela::AnaliseCircularGrafico:
+      return true;
+
+    // Todas as demais recebem o Back generico (voltar um nivel).
+    case Tela::Configuracoes:
+    case Tela::ModoOperacao:
+    case Tela::Brilho:
+    case Tela::Volume:
+    case Tela::AnaliseDadosToggle:
+    case Tela::ConfigCanais:
+    case Tela::ConfigCanaisTodos:
+    case Tela::ConfigCanaisTodosConfirmar:
+    case Tela::ConfigCanaisIndividualLista:
+    case Tela::ConfigCanaisIndividualEditar:
+    case Tela::ConfigCanaisIndividualConfirmar:
+    case Tela::ConfigCanaisVisualizar:
+    case Tela::ConfigCanaisRestaurarConfirmar:
+    case Tela::Experimentos:
+    case Tela::ExperimentoCancelarConfirmar:
+    case Tela::ExperimentoReiniciarConfirmar:
+    case Tela::ExperimentoSobrescreverConfirmar:
+    case Tela::ArquivoDetalhe:
+    case Tela::ArquivoExcluirConfirmar:
+    case Tela::ArquivosExcluirTodosConfirmar:
+    case Tela::ConexaoApp:
+      return false;
+  }
+  return false;
+}
+
 void processarComando(const Command& cmd, Origem /*origem*/) {
+  // Back generico: antes de qualquer despacho por tela. Ver telaCuidaDoBack().
+  if (cmd.tipo == CommandType::Back && !telaCuidaDoBack(estado.telaAtual)) {
+    Serial.printf("[NAV] Back generico a partir de %s\n", nomeTela(estado.telaAtual));
+    voltarUmNivel();
+    return;
+  }
+
   // Comandos "globais": agem direto sobre os módulos (as MESMAS funções que
   // as telas locais chamam), independente da tela atual. Na prática só o
   // Bluetooth os emite hoje — o encoder local só gera

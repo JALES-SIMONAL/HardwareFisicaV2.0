@@ -182,12 +182,24 @@ enum class AcaoToque : uint8_t {
   Voltar,      // botão Voltar do rodapé
   Proximo,     // botão baixo/"+" do rodapé
   Anterior,    // botão cima/"-" do rodapé
+  ZoomMais,    // só na tela de gráfico — tratado dentro da ihm
+  ZoomMenos,   // idem
 };
 
 struct ZonaToque {
   int16_t x = 0, y = 0, w = 0, h = 0;
   AcaoToque acao = AcaoToque::Nenhuma;
   uint8_t indice = 0;
+  // true = um toque só já confirma, sem precisar do segundo. Usado no
+  // teclado de texto: ali cada célula é um caractere, o alvo é grande, e a
+  // consequência de errar é apagar uma letra — não faz sentido cobrar dois
+  // toques por caractere digitado. Nas listas de menu continua false,
+  // porque lá o item errado pode ser "Excluir tudo".
+  bool confirmaDireto = false;
+  // Rótulo do botão, para repintá-lo no estado pressionado sem ter que
+  // deduzir o texto a partir da ação (o mesmo botão físico é "^" numa tela
+  // e "-" em outra).
+  const char* rotulo = "";
   bool contem(int16_t px, int16_t py) const {
     return px >= x && px < x + w && py >= y && py < y + h;
   }
@@ -205,14 +217,38 @@ uint8_t quantidadeZonas = 0;
 uint8_t indiceSelecionadoAtual = 0;
 uint8_t quantidadeItensAtual = 0;
 
+// ---------------------------------------------------------------------
+// Estado do gráfico (zoom e deslocamento)
+// ---------------------------------------------------------------------
+// Os pontos são COPIADOS para cá, não referenciados: o gesto redesenha o
+// gráfico fora do ciclo normal da máquina de estados, e a essa altura os
+// vetores originais (de analise_linear/analise_circular) podem já não estar
+// mais válidos. 255 é o teto de "quantidade", que é uint8_t.
+constexpr uint16_t MAX_PONTOS_GRAFICO = 255;
+float graficoTempos[MAX_PONTOS_GRAFICO];
+float graficoValores[MAX_PONTOS_GRAFICO];
+uint8_t graficoQuantidade = 0;
+char graficoTitulo[48] = "";
+bool graficoAtivo = false;
+// 1.0 = série inteira na tela. centro é a posição (0..1) do meio da janela
+// visível dentro da faixa total de tempo.
+float graficoZoom = 1.0f;
+float graficoCentro = 0.5f;
+constexpr float GRAFICO_ZOOM_MAX = 16.0f;
+
+
 void limparZonas() {
   quantidadeZonas = 0;
   indiceSelecionadoAtual = 0;
   quantidadeItensAtual = 0;
+  // Sair da tela de grafico desarma os gestos dele (zoom/arrasto lateral).
+  // desenharGrafico() liga isto de novo logo depois de chamar limparZonas().
+  graficoAtivo = false;
 }
 
 void registrarZona(int16_t x, int16_t y, int16_t w, int16_t h, AcaoToque acao,
-                   uint8_t indice = 0) {
+                   uint8_t indice = 0, bool confirmaDireto = false,
+                   const char* rotulo = "") {
   if (quantidadeZonas >= MAX_ZONAS) return;
   // Campo a campo em vez de inicialização por chaves: o projeto compila em
   // gnu++11, e nesse padrão um struct com inicializadores de membro
@@ -225,6 +261,8 @@ void registrarZona(int16_t x, int16_t y, int16_t w, int16_t h, AcaoToque acao,
   z.h = h;
   z.acao = acao;
   z.indice = indice;
+  z.confirmaDireto = confirmaDireto;
+  z.rotulo = rotulo;
   quantidadeZonas++;
 }
 
@@ -272,6 +310,42 @@ bool temZonaPressionada = false;
 // botão antes de soltar.
 int16_t ultimoXValido = -1;
 int16_t ultimoYValido = -1;
+
+// ---------------------------------------------------------------------
+// Gestos
+// ---------------------------------------------------------------------
+// O XPT2046 é resistivo e de PONTO ÚNICO: ele mede uma posição por vez, e
+// com dois dedos na tela devolve um ponto no meio dos dois. Por isso não há
+// (nem pode haver) pinça para ampliar — o gesto de dois dedos é
+// fisicamente indetectável neste hardware. O zoom do gráfico é feito pelos
+// botões - / + do rodapé, e o arrasto de um dedo faz o deslocamento
+// lateral, que é a parte que dá para fazer com um ponto só.
+//
+// Gestos implementados:
+//   - arrastar na vertical  -> rola a lista (move a seleção)
+//   - arrastar na horizontal na tela de gráfico -> desloca o gráfico
+//   - deslizar para a direita -> voltar
+//   - toque simples -> ver enfileirarSaltoParaItem()
+
+// Deslocamento a partir do qual o toque deixa de ser "toque" e vira gesto.
+// Abaixo disso é só o tremor natural do dedo em cima do alvo.
+constexpr int16_t LIMIAR_GESTO_PX = 14;
+
+// Deslize horizontal mínimo para contar como "voltar". Exige também ser
+// bem mais horizontal que vertical, senão uma rolagem meio torta viraria
+// um voltar acidental — que é justamente o gesto mais irritante de
+// disparar sem querer.
+constexpr int16_t LIMIAR_DESLIZE_VOLTAR_PX = 70;
+
+int16_t xInicialToque = 0;
+int16_t yInicialToque = 0;
+int16_t yReferenciaArrasto = 0;
+int16_t xReferenciaArrasto = 0;
+// true quando o dedo já passou de LIMIAR_GESTO_PX: a soltura deixa de
+// acionar a zona onde encostou (senão rolar a lista também selecionaria o
+// item de onde a rolagem partiu).
+bool virouGesto = false;
+
 
 // ---------------------------------------------------------------------
 // RAII do barramento SPI compartilhado com o cartão SD.
@@ -428,6 +502,11 @@ struct RotulosRodape {
   const char* anterior = "^";
   const char* proximo = "v";
   const char* confirmar = "OK";
+  // Ações dos dois botões do meio. Só a tela de gráfico as troca (para
+  // zoom); em todas as outras eles navegam. A POSIÇÃO nunca muda — é o que
+  // permite acertar o botão sem reler a tela a cada troca.
+  AcaoToque acaoAnterior = AcaoToque::Anterior;
+  AcaoToque acaoProximo = AcaoToque::Proximo;
 };
 
 void desenharBotoesRodape(const RotulosRodape& rotulos, bool mostrarVoltar = true) {
@@ -438,7 +517,7 @@ void desenharBotoesRodape(const RotulosRodape& rotulos, bool mostrarVoltar = tru
   const uint8_t fonte = layout::uiFontSize(1);
 
   const int16_t larguraBotao = largura / 4;
-  const AcaoToque acoes[4] = {AcaoToque::Voltar, AcaoToque::Anterior, AcaoToque::Proximo,
+  const AcaoToque acoes[4] = {AcaoToque::Voltar, rotulos.acaoAnterior, rotulos.acaoProximo,
                               AcaoToque::Confirmar};
   const char* textos[4] = {rotulos.voltar, rotulos.anterior, rotulos.proximo, rotulos.confirmar};
 
@@ -465,7 +544,7 @@ void desenharBotoesRodape(const RotulosRodape& rotulos, bool mostrarVoltar = tru
     imprimirTexto(x + (larguraBotao - larguraTexto) / 2, y + (alturaRodape - 8 * fonte) / 2,
                   textos[i]);
 
-    registrarZona(x, y, larguraBotao, alturaRodape, acoes[i]);
+    registrarZona(x, y, larguraBotao, alturaRodape, acoes[i], 0, false, textos[i]);
   }
 }
 
@@ -476,20 +555,12 @@ void pintarZonaPressionada(const ZonaToque& z, bool pressionada) {
   if (z.acao == AcaoToque::ItemLista || z.acao == AcaoToque::Nenhuma) return;
 
   const uint8_t fonte = layout::uiFontSize(1);
-  const char* texto = "";
-  switch (z.acao) {
-    case AcaoToque::Voltar: texto = "<"; break;
-    case AcaoToque::Anterior: texto = "^"; break;
-    case AcaoToque::Proximo: texto = "v"; break;
-    case AcaoToque::Confirmar: texto = "OK"; break;
-    default: break;
-  }
-
-  tft.fillRect(z.x, z.y, z.w - 1, z.h, pressionada ? UI_COR_BOTAO_PRESSIONADO : UI_COR_BOTAO);
-  const int16_t larguraTexto = static_cast<int16_t>(std::strlen(texto) * 6 * fonte);
+  const uint16_t corFundo = pressionada ? UI_COR_BOTAO_PRESSIONADO : UI_COR_BOTAO;
+  tft.fillRect(z.x, z.y, z.w - 1, z.h, corFundo);
+  const int16_t larguraTexto = static_cast<int16_t>(std::strlen(z.rotulo) * 6 * fonte);
   tft.setTextSize(fonte);
-  tft.setTextColor(pressionada ? UI_COR_TEXTO_SELECIONADO : UI_COR_TEXTO_BOTAO);
-  imprimirTexto(z.x + (z.w - larguraTexto) / 2, z.y + (z.h - 8 * fonte) / 2, texto);
+  tft.setTextColor(pressionada ? UI_COR_TEXTO_SELECIONADO : UI_COR_TEXTO_BOTAO, corFundo);
+  imprimirTexto(z.x + (z.w - larguraTexto) / 2, z.y + (z.h - 8 * fonte) / 2, z.rotulo);
 }
 
 // Toque num item de lista, em DOIS TEMPOS:
@@ -507,7 +578,7 @@ void pintarZonaPressionada(const ZonaToque& z, bool pressionada) {
 //
 // A tradução para o vocabulário da máquina de estados continua a mesma: só
 // mudou onde entra o Confirmar. Ver ihm.hpp.
-void enfileirarSaltoParaItem(uint8_t destino) {
+void enfileirarSaltoParaItem(uint8_t destino, bool confirmaDireto) {
   if (destino == indiceSelecionadoAtual) {
     enfileirar(EventoFila::Confirmar);
     return;
@@ -518,8 +589,17 @@ void enfileirarSaltoParaItem(uint8_t destino) {
   } else {
     for (uint8_t i = destino; i < indiceSelecionadoAtual; i++) enfileirar(EventoFila::Anterior);
   }
-  // Sem Confirmar aqui: o cursor só andou. Quem confirma é o próximo toque
-  // sobre o item (ou o botão OK do rodapé, que confirma direto).
+
+  // Nas listas de menu, sem Confirmar aqui: o cursor só andou, e quem
+  // confirma é o toque seguinte. No teclado de texto, confirmaDireto é
+  // true e o caractere sai no primeiro toque.
+  if (confirmaDireto) enfileirar(EventoFila::Confirmar);
+
+  // Todos os passos acima são consumidos NO MESMO tick pela máquina de
+  // estados (ver o laço em maquina_estados::tick()), então o cursor aparece
+  // direto no item tocado — sem a animação de "andar item por item" que a
+  // primeira versão deste porte tinha, herdada do jeito como o encoder
+  // entregava um passo por vez.
 }
 
 // Leitura crua do XPT2046 com mediana de 3 amostras. Mediana em vez de
@@ -553,6 +633,11 @@ bool lerToqueBruto(int16_t& x, int16_t& y) {
 }
 
 }  // namespace
+
+// Definida bem abaixo, junto das demais primitivas de desenho, mas
+// declarada aqui porque atualizarToque() a chama: os gestos de zoom e
+// arrasto redesenham o grafico sem passar pela maquina de estados.
+void desenharGraficoInterno();
 
 void init() {
   Serial.println("[DISPLAY] Inicializacao iniciada");
@@ -727,6 +812,11 @@ void atualizarToque() {
   if (agora && !tocando) {
     // ---- Borda de descida: dedo encostou ----
     tocando = true;
+    xInicialToque = x;
+    yInicialToque = y;
+    xReferenciaArrasto = x;
+    yReferenciaArrasto = y;
+    virouGesto = false;
 
     // Debounce: ignora um segundo toque logo depois do anterior. O repique
     // do touch resistivo chega a gerar dois toques de um encostar só, o que
@@ -742,6 +832,49 @@ void atualizarToque() {
       pintarZonaPressionada(zonaPressionada, true);
       break;
     }
+  } else if (agora && tocando) {
+    // ---- Dedo arrastando ----
+    const int16_t dx = x - xInicialToque;
+    const int16_t dy = y - yInicialToque;
+
+    if (!virouGesto && (abs(dx) > LIMIAR_GESTO_PX || abs(dy) > LIMIAR_GESTO_PX)) {
+      virouGesto = true;
+      // Desfaz o destaque do botão: o toque virou gesto e não vai mais
+      // acionar aquela zona, então deixá-lo aceso seria mentira visual.
+      if (temZonaPressionada) {
+        TravaBarramentoDisplay travaBus;
+        pintarZonaPressionada(zonaPressionada, false);
+      }
+    }
+
+    if (virouGesto) {
+      if (graficoAtivo && abs(dx) > abs(dy)) {
+        // Arrasto lateral no gráfico: desloca a janela visível. Segue o
+        // dedo — arrastar para a esquerda anda para a frente no tempo.
+        const int16_t passo = x - xReferenciaArrasto;
+        if (passo != 0 && graficoZoom > 1.0f) {
+          graficoCentro -= static_cast<float>(passo) / static_cast<float>(tft.width()) / graficoZoom;
+          if (graficoCentro < 0.0f) graficoCentro = 0.0f;
+          if (graficoCentro > 1.0f) graficoCentro = 1.0f;
+          xReferenciaArrasto = x;
+          TravaBarramentoDisplay travaBus;
+          desenharGraficoInterno();
+        }
+      } else if (!graficoAtivo && quantidadeItensAtual > 0) {
+        // Arrasto vertical numa lista: cada linha percorrida move a
+        // seleção em um item. Como a rolagem acompanha a seleção
+        // (offsetRolagem), mover a seleção é o que faz a lista rolar.
+        const int16_t alturaLinha = layout::uiLineSpacing();
+        while (y - yReferenciaArrasto >= alturaLinha) {
+          enfileirar(EventoFila::Anterior);  // dedo para baixo = sobe na lista
+          yReferenciaArrasto += alturaLinha;
+        }
+        while (yReferenciaArrasto - y >= alturaLinha) {
+          enfileirar(EventoFila::Proximo);
+          yReferenciaArrasto -= alturaLinha;
+        }
+      }
+    }
   } else if (!agora && tocando) {
     // ---- Borda de subida: dedo saiu ----
     // A ação acontece aqui, não na descida: assim o usuário pode arrastar o
@@ -749,20 +882,29 @@ void atualizarToque() {
     // comportamento esperado de qualquer interface de toque.
     tocando = false;
 
+    const int16_t dx = ultimoXValido - xInicialToque;
+    const int16_t dy = ultimoYValido - yInicialToque;
+
+    // Deslizar para a direita = voltar. Exige ser bem mais horizontal que
+    // vertical (2x) para não confundir com uma rolagem torta.
+    const bool deslizouParaVoltar =
+        virouGesto && dx > LIMIAR_DESLIZE_VOLTAR_PX && abs(dx) > 2 * abs(dy);
+
     if (temZonaPressionada) {
       {
         TravaBarramentoDisplay travaBus;
         pintarZonaPressionada(zonaPressionada, false);
       }
 
-      // Só aciona se o dedo estava DENTRO da mesma zona na última leitura
-      // válida — é isso que faz o "arrastar para fora para cancelar"
-      // funcionar de verdade.
-      if (zonaPressionada.contem(ultimoXValido, ultimoYValido)) {
+      // Só aciona se NÃO virou gesto e se o dedo estava dentro da mesma
+      // zona na última leitura válida — é isso que faz o "arrastar para
+      // fora para cancelar" funcionar, e o que impede uma rolagem de
+      // também selecionar o item de onde ela partiu.
+      if (!virouGesto && zonaPressionada.contem(ultimoXValido, ultimoYValido)) {
         ultimoToqueAceitoMs = ms;
         switch (zonaPressionada.acao) {
           case AcaoToque::ItemLista:
-            enfileirarSaltoParaItem(zonaPressionada.indice);
+            enfileirarSaltoParaItem(zonaPressionada.indice, zonaPressionada.confirmaDireto);
             break;
           case AcaoToque::Confirmar:
             enfileirar(EventoFila::Confirmar);
@@ -776,12 +918,35 @@ void atualizarToque() {
           case AcaoToque::Voltar:
             voltarPendente = true;
             break;
+          case AcaoToque::ZoomMais:
+          case AcaoToque::ZoomMenos: {
+            // Zoom não passa pela máquina de estados: é uma mudança de
+            // visualização, não de estado do firmware. A ihm redesenha o
+            // gráfico na hora, com os pontos que ela mesma copiou.
+            if (zonaPressionada.acao == AcaoToque::ZoomMais) {
+              graficoZoom *= 2.0f;
+              if (graficoZoom > GRAFICO_ZOOM_MAX) graficoZoom = GRAFICO_ZOOM_MAX;
+            } else {
+              graficoZoom /= 2.0f;
+              if (graficoZoom < 1.0f) graficoZoom = 1.0f;
+              if (graficoZoom == 1.0f) graficoCentro = 0.5f;
+            }
+            TravaBarramentoDisplay travaBus;
+            desenharGraficoInterno();
+            break;
+          }
           case AcaoToque::Nenhuma:
             break;
         }
       }
       temZonaPressionada = false;
     }
+
+    if (deslizouParaVoltar) {
+      ultimoToqueAceitoMs = ms;
+      voltarPendente = true;
+    }
+    virouGesto = false;
   }
 }
 
@@ -1214,8 +1379,12 @@ void desenharListaRolavel(const char* titulo, const char* const* linhas,
   if (!displayOk) return;
   TravaBarramentoDisplay travaBus;
   limparZonas();
+  // Habilita o arrasto vertical para rolar: esta tela não tem itens
+  // selecionáveis, mas a rolagem dela também é feita por Proximo/Anterior,
+  // que é o que o gesto emite.
+  quantidadeItensAtual = quantidade;
 
-  desenharCabecalhoRodape(titulo, "Use ^ e v para rolar");
+  desenharCabecalhoRodape(titulo, "Arraste para rolar");
 
   // Uma linha a menos que o layout permite: a dica acima da barra de botões
   // ocupa espaço que uiItensVisiveis() não conhece, e sem esta reserva a
@@ -1351,7 +1520,11 @@ void desenharTecladoTexto(const char* rotuloCampo, const char* valorAtual,
     imprimirTexto(x + (larguraCelula - larguraTexto) / 2, y + (alturaCelula - 8 * fonte) / 2,
                   rotulos[i]);
 
-    registrarZona(x, y, larguraCelula, alturaCelula, AcaoToque::ItemLista, i);
+    // confirmaDireto = true: no teclado, um toque ja digita o caractere.
+    // Cobrar dois toques por letra tornaria digitar um nome de arquivo
+    // insuportavel, e o custo de errar aqui e apagar uma letra — nada
+    // parecido com o de errar um item de menu.
+    registrarZona(x, y, larguraCelula, alturaCelula, AcaoToque::ItemLista, i, true);
     ultimaLinhaY = y + alturaCelula;
   }
 
@@ -1378,39 +1551,76 @@ void desenharMensagem(const char* titulo, const char* mensagem) {
   desenharBotoesRodape(RotulosRodape{});
 }
 
-void desenharGrafico(const char* titulo, const float* temposS, const float* valoresY, uint8_t quantidade) {
+// Desenha o gráfico a partir dos pontos JÁ COPIADOS para graficoTempos/
+// graficoValores, respeitando graficoZoom/graficoCentro. Fica fora do
+// namespace anônimo (foi declarada lá em cima) porque os gestos de zoom e
+// arrasto, tratados em atualizarToque(), precisam redesenhar sem passar
+// pela máquina de estados: zoom é mudança de visualização, não de estado do
+// firmware.
+void desenharGraficoInterno() {
   if (!displayOk) return;
-  TravaBarramentoDisplay travaBus;
   limparZonas();
+  graficoAtivo = true;
 
   limparConteudo(false);
-  desenharCabecalhoRodape(titulo);
+  desenharCabecalhoRodape(graficoTitulo);
 
   const uint8_t fonte = layout::uiFontSize(1);
 
-  if (quantidade == 0 || temposS == nullptr || valoresY == nullptr) {
+  RotulosRodape rodapeGrafico;
+  rodapeGrafico.anterior = "-";
+  rodapeGrafico.proximo = "+";
+  rodapeGrafico.acaoAnterior = AcaoToque::ZoomMenos;
+  rodapeGrafico.acaoProximo = AcaoToque::ZoomMais;
+
+  if (graficoQuantidade == 0) {
     tft.setTextSize(fonte);
-    tft.setTextColor(COR_TEXTO);
+    tft.setTextColor(COR_TEXTO, COR_FUNDO);
     imprimirTexto(layout::uiMargin(), layout::uiCenterY(), "Sem dados suficientes");
-    desenharBotoesRodape(RotulosRodape{});
+    desenharBotoesRodape(rodapeGrafico);
     return;
   }
 
-  float minY = valoresY[0];
-  float maxY = valoresY[0];
-  float minT = temposS[0];
-  float maxT = temposS[0];
-  for (uint8_t i = 1; i < quantidade; i++) {
-    if (valoresY[i] < minY) minY = valoresY[i];
-    if (valoresY[i] > maxY) maxY = valoresY[i];
-    if (temposS[i] < minT) minT = temposS[i];
-    if (temposS[i] > maxT) maxT = temposS[i];
+  float minT = graficoTempos[0];
+  float maxT = graficoTempos[0];
+  for (uint8_t i = 1; i < graficoQuantidade; i++) {
+    if (graficoTempos[i] < minT) minT = graficoTempos[i];
+    if (graficoTempos[i] > maxT) maxT = graficoTempos[i];
   }
-  // Evita divisao por zero quando todos os pontos tem o mesmo valor/tempo
-  // (ex.: um unico ponto) — nesse caso a serie fica desenhada como uma
-  // linha reta no meio da area do grafico.
+  // Evita divisao por zero quando todos os pontos tem o mesmo tempo (ex.:
+  // um unico ponto) — nesse caso a serie vira uma linha reta.
+  const float faixaTotalT = (maxT > minT) ? (maxT - minT) : 1.0f;
+
+  // Janela visível: com zoom 1 é a série inteira; a cada zoom a janela
+  // encolhe pela metade em torno de graficoCentro. O centro é preso às
+  // bordas para a janela nunca sair da faixa de dados — sem isso, arrastar
+  // até o fim deixaria a tela vazia.
+  const float larguraJanela = faixaTotalT / graficoZoom;
+  float t0 = minT + graficoCentro * faixaTotalT - larguraJanela / 2.0f;
+  if (t0 < minT) t0 = minT;
+  if (t0 > maxT - larguraJanela) t0 = maxT - larguraJanela;
+  const float t1 = t0 + larguraJanela;
+
+  // Escala do eixo Y recalculada para os pontos VISÍVEIS: ampliar um trecho
+  // e continuar usando a escala da série inteira achataria justamente o
+  // detalhe que o usuário ampliou para ver.
+  bool achouVisivel = false;
+  float minY = 0.0f, maxY = 0.0f;
+  for (uint8_t i = 0; i < graficoQuantidade; i++) {
+    if (graficoTempos[i] < t0 || graficoTempos[i] > t1) continue;
+    if (!achouVisivel) {
+      minY = maxY = graficoValores[i];
+      achouVisivel = true;
+    } else {
+      if (graficoValores[i] < minY) minY = graficoValores[i];
+      if (graficoValores[i] > maxY) maxY = graficoValores[i];
+    }
+  }
+  if (!achouVisivel) {
+    minY = 0.0f;
+    maxY = 1.0f;
+  }
   const float faixaY = (maxY > minY) ? (maxY - minY) : 1.0f;
-  const float faixaT = (maxT > minT) ? (maxT - minT) : 1.0f;
 
   const int16_t plotX0 = layout::uiMargin();
   const int16_t plotX1 = tft.width() - layout::uiMargin();
@@ -1419,7 +1629,7 @@ void desenharGrafico(const char* titulo, const float* temposS, const float* valo
   const int16_t plotLargura = plotX1 - plotX0;
   const int16_t plotAltura = plotY1 - plotY0;
   if (plotLargura <= 1 || plotAltura <= 1) {
-    desenharBotoesRodape(RotulosRodape{});
+    desenharBotoesRodape(rodapeGrafico);
     return;
   }
 
@@ -1432,30 +1642,75 @@ void desenharGrafico(const char* titulo, const float* temposS, const float* valo
 
   int16_t xAnterior = 0;
   int16_t yAnterior = 0;
-  for (uint8_t i = 0; i < quantidade; i++) {
-    const int16_t x = plotX0 + static_cast<int16_t>((temposS[i] - minT) / faixaT * (plotLargura - 1));
-    const int16_t y = plotY1 - static_cast<int16_t>((valoresY[i] - minY) / faixaY * (plotAltura - 1));
-    if (i > 0) {
+  bool temAnterior = false;
+  for (uint8_t i = 0; i < graficoQuantidade; i++) {
+    if (graficoTempos[i] < t0 || graficoTempos[i] > t1) {
+      temAnterior = false;  // saiu da janela: não liga por cima do corte
+      continue;
+    }
+    const int16_t x =
+        plotX0 + static_cast<int16_t>((graficoTempos[i] - t0) / larguraJanela * (plotLargura - 1));
+    const int16_t y =
+        plotY1 - static_cast<int16_t>((graficoValores[i] - minY) / faixaY * (plotAltura - 1));
+    if (temAnterior) {
       tft.drawLine(xAnterior, yAnterior, x, y, COR_VALOR);
     }
     tft.fillRect(x - 1, y - 1, 3, 3, COR_VALOR);
     xAnterior = x;
     yAnterior = y;
+    temAnterior = true;
   }
 
   // Valores minimo/maximo do eixo Y, nos cantos superior/inferior esquerdos
-  // da area do grafico (unica indicacao numerica da escala vertical — o
-  // eixo X so precisa caber a serie inteira, sem rotulo numerico).
+  // da area do grafico. Com zoom > 1 mostra tambem a janela de tempo, senão
+  // não haveria como saber que trecho da série está na tela.
   char bufMax[12];
   char bufMin[12];
   snprintf(bufMax, sizeof(bufMax), "%.2f", static_cast<double>(maxY));
   snprintf(bufMin, sizeof(bufMin), "%.2f", static_cast<double>(minY));
   tft.setTextSize(fonte);
-  tft.setTextColor(COR_RODAPE);
+  tft.setTextColor(COR_RODAPE, COR_FUNDO);
   imprimirTexto(plotX0 + 1, plotY0, bufMax);
   imprimirTexto(plotX0 + 1, plotY1 - layout::uiLineSpacing(), bufMin);
 
-  desenharBotoesRodape(RotulosRodape{});
+  if (graficoZoom > 1.0f) {
+    char bufJanela[32];
+    snprintf(bufJanela, sizeof(bufJanela), "%.2f-%.2fs  %.0fx", static_cast<double>(t0),
+             static_cast<double>(t1), static_cast<double>(graficoZoom));
+    const int16_t larguraJanelaTexto = static_cast<int16_t>(std::strlen(bufJanela) * 6 * fonte);
+    imprimirTexto(plotX1 - larguraJanelaTexto - 2, plotY0, bufJanela);
+  }
+
+  desenharBotoesRodape(rodapeGrafico);
+}
+
+void desenharGrafico(const char* titulo, const float* temposS, const float* valoresY, uint8_t quantidade) {
+  if (!displayOk) return;
+  TravaBarramentoDisplay travaBus;
+
+  // Copia os pontos em vez de guardar os ponteiros: os gestos redesenham o
+  // gráfico depois, fora do ciclo da máquina de estados, e a essa altura os
+  // vetores de analise_linear/analise_circular podem já não valer mais.
+  graficoQuantidade = 0;
+  if (temposS != nullptr && valoresY != nullptr) {
+    const uint16_t limite = (quantidade < MAX_PONTOS_GRAFICO) ? quantidade : MAX_PONTOS_GRAFICO;
+    for (uint16_t i = 0; i < limite; i++) {
+      graficoTempos[i] = temposS[i];
+      graficoValores[i] = valoresY[i];
+    }
+    graficoQuantidade = static_cast<uint8_t>(limite);
+  }
+
+  std::strncpy(graficoTitulo, titulo != nullptr ? titulo : "", sizeof(graficoTitulo) - 1);
+  graficoTitulo[sizeof(graficoTitulo) - 1] = '\0';
+
+  // Entrar na tela (ou trocar de repetição) sempre começa mostrando a série
+  // inteira: manter o zoom da visualização anterior deixaria o usuário
+  // olhando um pedaço arbitrário de uma curva que ele acabou de abrir.
+  graficoZoom = 1.0f;
+  graficoCentro = 0.5f;
+
+  desenharGraficoInterno();
 }
 
 bool desenharImagemBMP(const char* nomeComExtensao, int16_t x, int16_t y, int16_t larguraMaxima,

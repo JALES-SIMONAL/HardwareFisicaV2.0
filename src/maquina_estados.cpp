@@ -2731,14 +2731,22 @@ void tick() {
   // falando o mesmo vocabulario Next/Previous/Confirm/Back.
   ihm::atualizarToque();
 
-  const ihm::EventoNavegacao evento = ihm::lerEventoNavegacao();
-  if (evento == ihm::EventoNavegacao::Proximo) {
-    Serial.println("[TOQUE] Navegacao: proximo");
-    cmd.tipo = CommandType::Next;
-    processarComando(cmd, Origem::Local);
-  } else if (evento == ihm::EventoNavegacao::Anterior) {
-    Serial.println("[TOQUE] Navegacao: anterior");
-    cmd.tipo = CommandType::Previous;
+  // Consome TODOS os passos de navegacao pendentes DENTRO DESTE MESMO tick,
+  // e so depois redesenha (o redesenho fica la embaixo, uma vez so).
+  //
+  // Isto e o que faz o cursor SALTAR direto para o item tocado. Antes, um
+  // passo era consumido por tick: como cada tick que redesenha leva dezenas
+  // de milissegundos, um toque tres itens abaixo produzia tres redesenhos
+  // em sequencia e o cursor aparecia "andando" ate la — a animacao de
+  // encoder, que fazia sentido quando os passos de fato chegavam um a um do
+  // giro, e nenhum sentido quando o usuario apontou o dedo no destino.
+  //
+  // Drenar a fila e seguro porque Next/Previous so movem a selecao dentro
+  // da tela atual; nenhum dos dois troca de tela nem dispara acao.
+  for (ihm::EventoNavegacao evento = ihm::lerEventoNavegacao();
+       evento != ihm::EventoNavegacao::Nenhum; evento = ihm::lerEventoNavegacao()) {
+    cmd.tipo = (evento == ihm::EventoNavegacao::Proximo) ? CommandType::Next
+                                                         : CommandType::Previous;
     processarComando(cmd, Origem::Local);
   }
 

@@ -56,7 +56,7 @@ void escreverTextoTela(const char* texto, int16_t x = 10, int16_t y = 10,
 // reescrita, e o controle pelo aplicativo Bluetooth continua entrando pelo
 // mesmo caminho.
 //
-// SELEÇÃO EM DOIS TEMPOS (duplo toque)
+// SELEÇÃO EM DOIS TEMPOS (duplo toque), COM UMA EXCEÇÃO
 //
 //   1o toque num item que não está selecionado -> só move o cursor até ele;
 //   toque num item que já está selecionado     -> confirma.
@@ -68,6 +68,34 @@ void escreverTextoTela(const char* texto, int16_t x = 10, int16_t y = 10,
 // cancelar experimento em andamento) — o custo de um toque a mais por
 // escolha é pequeno perto de executar a ação errada. O botão OK do rodapé
 // confirma direto, para quem já está com o item certo selecionado.
+//
+// A EXCEÇÃO é o teclado de texto (desenharTecladoTexto): ali cada célula é
+// um caractere e um único toque já digita. Cobrar dois toques por letra
+// tornaria escrever um nome de arquivo insuportável, e o custo de errar é
+// apagar uma letra — nada parecido com o de errar um item de menu.
+//
+// O cursor SALTA para o item tocado, sem passar pelos itens do meio: a
+// máquina de estados drena todos os passos no mesmo tick e só então
+// redesenha (ver o laço em maquina_estados::tick()).
+//
+// ---------------------------------------------------------------------
+// GESTOS
+// ---------------------------------------------------------------------
+//   - arrastar na vertical .......... rola a lista
+//   - deslizar para a direita ....... voltar (mesmo efeito do botão <)
+//   - arrastar na horizontal
+//     na tela de gráfico ............ desloca a janela visível
+//   - botões - / + no gráfico ....... afasta / aproxima o zoom
+//
+// Um arrasto NUNCA aciona a zona de onde partiu: assim que o dedo passa do
+// limiar de gesto, o toque é descartado como seleção. Sem isso, rolar uma
+// lista também selecionaria o item onde o dedo encostou.
+//
+// NÃO HÁ PINÇA PARA AMPLIAR, e não é uma omissão: o XPT2046 é resistivo de
+// ponto único — com dois dedos na tela ele devolve um ponto no meio dos
+// dois, então o gesto é fisicamente indetectável neste hardware. Por isso o
+// zoom do gráfico está nos botões - / +, e o arrasto de um dedo faz o
+// deslocamento lateral, que é a parte que dá para fazer com um ponto só.
 //
 // Os eventos saem da fila UM POR TICK e na ordem em que entraram
 // (lerEventoNavegacao() só retira Proximo/Anterior; confirmacaoSolicitada()

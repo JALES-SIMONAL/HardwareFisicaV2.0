@@ -23,16 +23,67 @@
 // aparencia da IHM.
 //
 // ---------------------------------------------------------------------
-// MAPA FINAL (nenhum pino repetido)
+// MAPA DE PINOS — numeracao do conector do modulo (2.8_SPI_28005, 19 vias)
 // ---------------------------------------------------------------------
-//   Barramento SPI comum (tela + touch + cartao SD):
-//     SCK  12 | MOSI 11 | MISO 13
-//   Tela:   CS 10 | DC 9 | RST 14 | BL 15
-//   Touch:  T_CS 8 | T_IRQ 7 (nao usado)
-//   SD:     CS 5                          <- mantido da main
-//   NeoPixel: 21                          <- mantido da main
-//   Buzzer:   16                          <- movido (13 virou o MISO)
-//   Canais:   1, 2, 4, 6, 17, 18          <- remapeados (ver acima)
+// A coluna "pino" e a do simbolo/serigrafia do modulo; "sinal" e o nome
+// impresso nele. Nenhum GPIO se repete.
+//
+//   pino  sinal no modulo   GPIO   observacao
+//   ----  ----------------  -----  --------------------------------------
+//     1   VCC                 --   ver a nota de alimentacao abaixo
+//     2   GND                GND   comum a tudo, obrigatorio
+//     3   CS                  10   chip select da TELA
+//     4   RESET               14
+//     5   DC                   9
+//     6   SDI(MOSI)           11
+//     7   SCK                 12
+//     8   LED                 15   backlight (PWM, canal LEDC 2)
+//     9   SDO(MISO)           13
+//    10   T_CLK               12   PONTE para o pino 7
+//    11   T_CS                 8   chip select do TOUCH
+//    12   T_SDI               11   PONTE para o pino 6
+//    13   T_SDO               13   PONTE para o pino 9
+//    14   T_IRQ                7   ligado, mas o firmware nao usa
+//    15   T_CLK/SCL           --   nao usado
+//    16   T_CS/RST            --   nao usado
+//    17   T_SDI/SDA           --   nao usado
+//    18   T_SDO               --   nao usado
+//    19   T_IRQ/INT           --   nao usado
+//
+// PINOS 15 A 19: pelos nomes (SCL/SDA/RST/INT) sao a interface I2C de um
+// controlador de toque CAPACITIVO — o mesmo modulo atende as duas opcoes de
+// painel. Este firmware usa o toque RESISTIVO, que fica nos pinos 10 a 14
+// (XPT2046, SPI). Deixe 15 a 19 desligados.
+//
+// PONTES OBRIGATORIAS (pinos 10, 12 e 13): o barramento SPI do touch nao e
+// ligado internamente ao da tela nestes modulos — os pinos existem
+// separados no conector. Voce mesmo precisa uni-los aos da tela:
+//   pino 10 (T_CLK) junto com o pino  7 (SCK)
+//   pino 12 (T_SDI) junto com o pino  6 (SDI/MOSI)
+//   pino 13 (T_SDO) junto com o pino  9 (SDO/MISO)
+// Sem essas tres pontes a tela funciona e o toque nao responde a nada.
+//
+// ---------------------------------------------------------------------
+// FORA DO MODULO DA TELA
+// ---------------------------------------------------------------------
+// Este modulo NAO tem cartao SD — o simbolo tem 19 vias e nenhuma delas e
+// de cartao. O microSD e uma placa separada, ligada ao MESMO barramento SPI
+// (pinos 6/7/9 acima) com um chip select proprio:
+//
+//   microSD:  CS 5    + SCK 12, MOSI 11, MISO 13 (compartilhados)
+//   NeoPixel: 21      (6 LEDs)
+//   Buzzer:   16
+//   Canais:   1, 2, 4, 6, 17, 18   (sensores 1 a 6, nesta ordem)
+//
+// ---------------------------------------------------------------------
+// ALIMENTACAO (pino 1)
+// ---------------------------------------------------------------------
+// Estes modulos tem regulador embutido com dropout de ~1.1V. Com o jumper
+// J1 aberto (padrao de fabrica) o VCC precisa de 5V; alimentar com 3.3V ali
+// entrega ~2.2V ao controlador e produz corrupcao de imagem e leitura
+// instavel de toque. Com J1 fechado, VCC = 3.3V direto. Os pinos de dados
+// sao 3.3V nos dois casos.
+//
 #pragma once
 
 #include <Arduino.h>

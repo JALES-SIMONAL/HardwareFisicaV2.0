@@ -133,3 +133,55 @@ L.append('')
 
 io.open('docs/PINAGEM.md', 'w', encoding='utf-8', newline='\n').write('\n'.join(L))
 print(f'docs/PINAGEM.md gerado: {len(MODULO)} pinos do modulo, {len(OUTROS)} outros sinais')
+
+
+# ---------------------------------------------------------------------
+# Regenera tambem o bloco de tabela dentro de include/MAIN.HPP
+# ---------------------------------------------------------------------
+# Duas tabelas mantidas a mao divergem — ja aconteceu neste projeto. Aqui as
+# duas saem da MESMA leitura das flags e constantes, na mesma execucao.
+INI_MARCA = '// <<< PINAGEM-GERADA-INICIO'
+FIM_MARCA = '// <<< PINAGEM-GERADA-FIM >>>'
+
+H = []
+H.append('// ---------------------------------------------------------------------')
+H.append('// MAPA DE PINOS — ordenado para MINIMIZAR CRUZAMENTO DE FIOS NA PCB')
+H.append('// ---------------------------------------------------------------------')
+H.append('// Tabela completa, com as pontes e os motivos: docs/PINAGEM.md')
+H.append('//')
+H.append('// O criterio nao e o numero do GPIO, e a POSICAO FISICA da via no header')
+H.append('// do DevKitC-1. Dois fios so se cruzam quando a ordem em que saem do')
+H.append('// conector difere da ordem em que chegam ao header — entao cada grupo sobe')
+H.append('// pelo header na sequencia do seu proprio conector. Por isso os GPIO')
+H.append('// parecem fora de ordem: e a ordem das VIAS que importa aqui.')
+H.append('//')
+H.append('// Modulo da tela (TJCTM24028-SPI) — coluna esquerda:')
+H.append('//')
+H.append('//   pino  sinal        GPIO   via')
+H.append('//   ----  -----------  -----  ---------')
+for pino, sinal, destino, _obs in MODULO:
+    if destino.startswith('GPIO'):
+        g = destino[4:]
+        H.append(f'//   {pino:>4d}  {sinal:<11s}  {g:>5s}  {via(g)}')
+    else:
+        H.append(f'//   {pino:>4d}  {sinal:<11s}  {"--":>5s}  {destino}')
+H.append('//')
+H.append('// Sensores e indicadores — coluna direita:')
+H.append('//')
+for sinal, g, _o in OUTROS:
+    H.append(f'//   {sinal:<14s} GPIO{g:<4s} {via(g)}')
+H.append('//')
+H.append('// GPIO reservados nesta placa: 26..32 (flash), 33..37 (PSRAM octal),')
+H.append('// 19/20 (USB nativo), 43/44 (UART0), 0/3/45/46 (strapping), 48 (LED da')
+H.append('// placa). GPIO25 nao existe no S3.')
+H.append('//')
+H.append('// Alimentacao do modulo: com J1 aberto (padrao) VCC = 5V; com J1 fechado,')
+H.append('// 3V3. Os pinos de dados sao 3.3V nos dois casos. Cartao em FAT32.')
+
+hpp_novo = io.open('include/MAIN.HPP', encoding='utf-8').read()
+a = hpp_novo.index(INI_MARCA)
+a = hpp_novo.index(chr(10), a) + 1
+b = hpp_novo.index(FIM_MARCA)
+io.open('include/MAIN.HPP', 'w', encoding='utf-8', newline='').write(
+    hpp_novo[:a] + chr(10).join(H) + chr(10) + hpp_novo[b:])
+print('include/MAIN.HPP: bloco de tabela regenerado')

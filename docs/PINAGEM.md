@@ -16,19 +16,19 @@ cruzarem na PCB.
 |-----:|-------|---------|-----|------------|
 | 1 | `VCC` | ver alimentacao | - | com J1 aberto = 5V; com J1 fechado = 3V3 |
 | 2 | `GND` | GND | - | comum a tudo |
-| 3 | `CS` | GPIO4 | esq 4 | chip select da TELA |
-| 4 | `RESET` | GPIO5 | esq 5 |  |
-| 5 | `D/C` | GPIO6 | esq 6 | dado / comando |
-| 6 | `MOSI` | GPIO7 | esq 7 | dado do ESP32 para o modulo |
-| 7 | `SCK` | GPIO15 | esq 8 | clock do barramento |
-| 8 | `LED` | GPIO16 | esq 9 | backlight, PWM no canal LEDC 2 |
-| 9 | `SDO(MISO)` | GPIO17 | esq 10 | dado do modulo para o ESP32 |
+| 3 | `CS` | GPIO5 | esq 5 | chip select da TELA |
+| 4 | `RESET` | GPIO6 | esq 6 |  |
+| 5 | `D/C` | GPIO7 | esq 7 | dado / comando |
+| 6 | `MOSI` | GPIO15 | esq 8 | dado do ESP32 para o modulo |
+| 7 | `SCK` | GPIO16 | esq 9 | clock do barramento |
+| 8 | `LED` | GPIO17 | esq 10 | backlight, PWM no canal LEDC 2 |
+| 9 | `SDO(MISO)` | GPIO18 | esq 11 | dado do modulo para o ESP32 |
 | 10 | `T_CLK` | ponte -> pino 7 | - | clock do touch |
-| 11 | `T_CS` | GPIO18 | esq 11 | chip select do TOUCH |
+| 11 | `T_CS` | GPIO8 | esq 12 | chip select do TOUCH |
 | 12 | `T_DIN` | ponte -> pino 6 | - | MOSI do touch |
 | 13 | `T_DO` | ponte -> pino 9 | - | MISO do touch |
 | 14 | `T_IRQ` | NAO LIGAR | - | o firmware le o toque por consulta |
-| 15 | `SD_CS` | GPIO8 | esq 12 | chip select do CARTAO |
+| 15 | `SD_CS` | GPIO9 | esq 17 | chip select do CARTAO |
 | 16 | `SD_MOSI` | ponte -> pino 6 | - |  |
 | 17 | `SD_MISO` | ponte -> pino 9 | - |  |
 | 18 | `SD_SCK` | ponte -> pino 7 | - |  |
@@ -63,9 +63,9 @@ Sem elas a tela funciona, mas o toque nao responde e o cartao nao monta.
 
 | dispositivo | CS |
 |-------------|----|
-| Tela | GPIO4 |
-| Touch | GPIO18 |
-| Cartao SD | GPIO8 |
+| Tela | GPIO5 |
+| Touch | GPIO8 |
+| Cartao SD | GPIO9 |
 
 ## GPIO que NAO podem ser usados nesta placa
 

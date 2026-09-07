@@ -59,6 +59,26 @@ OUTROS = ([(f'Canal {i}', g, 'sensor, entrada com interrupcao')
           [('NeoPixel DIN', ct['PIN_NEO'], f'{ct["NUM_LEDS"]} LEDs WS2812 em serie'),
            ('Buzzer +', ct['BUZZER_PIN'], 'passivo, acionado por tone()')])
 
+
+# Sentido da coluna, DERIVADO da tabela — nao escrito a mao. O texto sobre a
+# orientacao do display ja ficou desatualizado uma vez por estar fixo.
+_gpios_modulo = [int(d[4:]) for _, _, d, _ in MODULO if d.startswith('GPIO')]
+_vias_modulo = [int(via(str(g)).split()[1]) for g in _gpios_modulo]
+_crescente = _vias_modulo == sorted(_vias_modulo)
+_coluna = ', '.join(str(g) for g in _gpios_modulo)
+if _crescente:
+    _ORIENTACAO = (
+        'As vias sobem junto com os pinos do conector (coluna de GPIO: '
+        + _coluna + '), o que corresponde ao modulo montado na orientacao '
+        'normal. Se o display for virado de cabeca para baixo, esta ordem '
+        'passa a cruzar os fios em leque e a coluna precisa ser invertida.')
+else:
+    _ORIENTACAO = (
+        'As vias sobem enquanto os pinos do conector descem (coluna de GPIO: '
+        + _coluna + '), o que corresponde ao modulo montado DE CABECA PARA '
+        'BAIXO. Ordenar a coluna em ordem crescente, achando que esta '
+        'arrumando, cruzaria os fios em leque.')
+
 L = []
 L.append('# Pinagem — HardwareFisicaV2.0 no ESP32-S3')
 L.append('')
@@ -70,12 +90,7 @@ L.append('Placa: **ESP32-S3-WROOM-1 N16R8** (DevKitC-1) · Display: **TJCTM24028
 L.append('')
 L.append('A coluna *via* e a posicao fisica no header (esq/dir, de cima para baixo).')
 L.append('')
-L.append('> **O display e montado DE CABECA PARA BAIXO.** Por isso a coluna de GPIO')
-L.append('> DESCE (9, 8, 18, 17, 16, 15, 7, 6, 5) em vez de subir: virado, o conector')
-L.append('> apresenta os pinos na ordem inversa, e e essa ordem invertida que precisa')
-L.append('> acompanhar as vias do header para os fios ficarem paralelos. Reordenar a')
-L.append('> coluna em ordem crescente, achando que esta arrumando, faria os nove fios')
-L.append('> se cruzarem em leque.')
+L.append('> ' + _ORIENTACAO)
 L.append('A ordem das vias segue a ordem dos pinos do conector, para os fios nao se')
 L.append('cruzarem na PCB.')
 L.append('')
@@ -162,10 +177,8 @@ H.append('// conector difere da ordem em que chegam ao header — entao cada gru
 H.append('// pelo header na sequencia do seu proprio conector. Por isso os GPIO')
 H.append('// parecem fora de ordem: e a ordem das VIAS que importa aqui.')
 H.append('//')
-H.append('// O DISPLAY E MONTADO DE CABECA PARA BAIXO — por isso a coluna de GPIO')
-H.append('// desce (9, 8, 18, 17, 16, 15, 7, 6, 5). Virado, o conector apresenta os')
-H.append('// pinos na ordem inversa; poe-los em ordem crescente cruzaria os nove')
-H.append('// fios em leque.')
+for _l in __import__('textwrap').wrap(_ORIENTACAO, 68):
+    H.append('// ' + _l)
 H.append('//')
 H.append('// Modulo da tela (TJCTM24028-SPI) — coluna esquerda:')
 H.append('//')

@@ -23,66 +23,109 @@
 // aparencia da IHM.
 //
 // ---------------------------------------------------------------------
-// MAPA DE PINOS — numeracao do conector do modulo (2.8_SPI_28005, 19 vias)
+// MAPA DE PINOS — ordenado para MINIMIZAR CRUZAMENTO DE FIOS NA PCB
 // ---------------------------------------------------------------------
-// A coluna "pino" e a do simbolo/serigrafia do modulo; "sinal" e o nome
-// impresso nele. Nenhum GPIO se repete.
+// O criterio desta tabela nao e o numero do GPIO, e a POSICAO FISICA da via
+// no header do ESP32-S3-DevKitC-1. Dois fios so se cruzam quando a ordem em
+// que saem do conector e diferente da ordem em que chegam ao header — entao
+// basta que cada grupo suba pelo header na mesma sequencia do seu conector
+// para o chicote inteiro ficar paralelo, sem um fio passar por cima do
+// outro.
 //
-//   pino  sinal no modulo   GPIO   observacao
-//   ----  ----------------  -----  --------------------------------------
-//     1   VCC                 --   ver a nota de alimentacao abaixo
-//     2   GND                GND   comum a tudo, obrigatorio
-//     3   CS                  10   chip select da TELA
-//     4   RESET               14
-//     5   DC                   9
-//     6   SDI(MOSI)           11
-//     7   SCK                 12
-//     8   LED                 15   backlight (PWM, canal LEDC 2)
-//     9   SDO(MISO)           13
-//    10   T_CLK               12   PONTE para o pino 7
-//    11   T_CS                 8   chip select do TOUCH
-//    12   T_SDI               11   PONTE para o pino 6
-//    13   T_SDO               13   PONTE para o pino 9
-//    14   T_IRQ                7   ligado, mas o firmware nao usa
-//    15   T_CLK/SCL           --   nao usado
-//    16   T_CS/RST            --   nao usado
-//    17   T_SDI/SDA           --   nao usado
-//    18   T_SDO               --   nao usado
-//    19   T_IRQ/INT           --   nao usado
+// Por isso os GPIO parecem fora de ordem (…7, 15, 16, 17, 18, 8…): essa e a
+// ordem FISICA das vias na placa, e e ela que importa aqui. Reordenar por
+// numero de GPIO desfaria justamente o que esta tabela resolve.
 //
-// PINOS 15 A 19: pelos nomes (SCL/SDA/RST/INT) sao a interface I2C de um
-// controlador de toque CAPACITIVO — o mesmo modulo atende as duas opcoes de
-// painel. Este firmware usa o toque RESISTIVO, que fica nos pinos 10 a 14
-// (XPT2046, SPI). Deixe 15 a 19 desligados.
-//
-// PONTES OBRIGATORIAS (pinos 10, 12 e 13): o barramento SPI do touch nao e
-// ligado internamente ao da tela nestes modulos — os pinos existem
-// separados no conector. Voce mesmo precisa uni-los aos da tela:
-//   pino 10 (T_CLK) junto com o pino  7 (SCK)
-//   pino 12 (T_SDI) junto com o pino  6 (SDI/MOSI)
-//   pino 13 (T_SDO) junto com o pino  9 (SDO/MISO)
-// Sem essas tres pontes a tela funciona e o toque nao responde a nada.
+// Verificado por script: 0 cruzamentos dentro de cada grupo, os dois grupos
+// em colunas opostas do header (nao se cruzam entre si), nenhum GPIO
+// repetido e nenhum GPIO reservado usado.
 //
 // ---------------------------------------------------------------------
-// FORA DO MODULO DA TELA
+// GRUPO 1 — modulo da tela (TJCTM24028-SPI), coluna ESQUERDA do header
 // ---------------------------------------------------------------------
-// Este modulo NAO tem cartao SD — o simbolo tem 19 vias e nenhuma delas e
-// de cartao. O microSD e uma placa separada, ligada ao MESMO barramento SPI
-// (pinos 6/7/9 acima) com um chip select proprio:
+// Nove fios em vias CONSECUTIVAS (4 a 12), na mesma ordem do conector.
 //
-//   microSD:  CS 5    + SCK 12, MOSI 11, MISO 13 (compartilhados)
-//   NeoPixel: 21      (6 LEDs)
-//   Buzzer:   16
-//   Canais:   1, 2, 4, 6, 17, 18   (sensores 1 a 6, nesta ordem)
+//   pino  sinal no modulo   GPIO   via do header
+//   ----  ----------------  -----  ------------------------------------
+//     1   VCC                 --   alimentacao, ver nota abaixo
+//     2   GND                GND   comum a tudo
+//     3   CS                   4   via 4    chip select da TELA
+//     4   RESET                5   via 5
+//     5   D/C                  6   via 6
+//     6   MOSI                 7   via 7
+//     7   SCK                 15   via 8
+//     8   LED                 16   via 9    backlight (PWM, LEDC canal 2)
+//     9   SDO(MISO)           17   via 10
+//    10   T_CLK               --   PONTE local para o pino 7
+//    11   T_CS                18   via 11   chip select do TOUCH
+//    12   T_DIN               --   PONTE local para o pino 6
+//    13   T_DO                --   PONTE local para o pino 9
+//    14   T_IRQ               --   NAO LIGAR (ver abaixo)
+//    15   SD_CS                8   via 12   chip select do CARTAO
+//    16   SD_MOSI             --   PONTE local para o pino 6
+//    17   SD_MISO             --   PONTE local para o pino 9
+//    18   SD_SCK              --   PONTE local para o pino 7
+//
+// AS SEIS PONTES SAO LOCAIS, no proprio conector — nao viram fio ate o
+// ESP32. O touch e o cartao compartilham o barramento da tela e se
+// distinguem so pelo CS. Feitas assim, elas nao entram na conta de
+// cruzamento: ficam contidas na regiao do conector.
+//   pinos 10, 18  ->  pino  7 (SCK)
+//   pinos 12, 16  ->  pino  6 (MOSI)
+//   pinos 13, 17  ->  pino  9 (MISO)
+// Sem essas pontes a tela funciona, mas o toque nao responde e o cartao nao
+// inicializa — sintoma que se confunde facil com defeito de calibracao ou
+// de cartao.
+//
+// T_IRQ (pino 14) FICA DESLIGADO DE PROPOSITO. O firmware le o toque por
+// consulta ao XPT2046, nunca por interrupcao, entao esse fio nao teria
+// funcao — e liga-lo custaria uma via a mais e quebraria a sequencia
+// continua das vias 4 a 12, que e o que garante zero cruzamentos aqui.
 //
 // ---------------------------------------------------------------------
-// ALIMENTACAO (pino 1)
+// GRUPO 2 — sensores e indicadores, coluna DIREITA do header
+// ---------------------------------------------------------------------
+// Coluna oposta a da tela: os dois chicotes saem por lados diferentes da
+// placa e nao tem como se cruzar.
+//
+//   sinal        GPIO   via do header
+//   -----------  -----  --------------------------------------------
+//   Canal 1         1   via 4
+//   Canal 2         2   via 5
+//   Canal 3        42   via 6
+//   Canal 4        41   via 7
+//   Canal 5        40   via 8
+//   Canal 6        39   via 9
+//   NeoPixel       38   via 10   6 LEDs WS2812, em serie
+//   Buzzer         47   via 17   passivo, acionado por tone()
+//
+// Os seis canais ficam em vias consecutivas e na ordem 1..6, entao o
+// conector de sensores tambem entra sem cruzar. O salto do buzzer (via 10
+// para 17) e forcado: as vias 11 a 16 sao GPIO35/36/37 (PSRAM octal), 0 e
+// 45 (strapping) e 48 (LED RGB da placa). Um salto nao cruza nada — so
+// deixa um fio mais comprido.
+//
+// ---------------------------------------------------------------------
+// GPIO QUE NAO PODEM SER USADOS NESTA PLACA
+// ---------------------------------------------------------------------
+//   26..32          flash SPI interna
+//   33..37          PSRAM octal (memory_type = qio_opi)
+//   19, 20          USB nativo (D-/D+), usado pelo Serial CDC
+//   43, 44          UART0
+//   0, 3, 45, 46    strapping (mudam o modo de boot se forcados no reset)
+//   48              LED RGB embutido na placa
+// GPIO25 nao existe no S3.
+//
+// ---------------------------------------------------------------------
+// ALIMENTACAO (pino 1 do modulo)
 // ---------------------------------------------------------------------
 // Estes modulos tem regulador embutido com dropout de ~1.1V. Com o jumper
 // J1 aberto (padrao de fabrica) o VCC precisa de 5V; alimentar com 3.3V ali
 // entrega ~2.2V ao controlador e produz corrupcao de imagem e leitura
 // instavel de toque. Com J1 fechado, VCC = 3.3V direto. Os pinos de dados
 // sao 3.3V nos dois casos.
+//
+// O cartao precisa estar formatado em FAT32.
 //
 #pragma once
 
@@ -103,7 +146,7 @@ constexpr unsigned long SERIAL_BAUD_RATE = 115200;
 // respectivamente, canal de sensor, RST da tela e backlight.
 
 // pino físico dos LEDs endereçáveis (NeoPixel)
-constexpr uint8_t PIN_NEO = 21;
+constexpr uint8_t PIN_NEO = 38;
 constexpr uint16_t NUM_LEDS = 6;
 
 // ---------------------------------------------------------------------
@@ -116,36 +159,36 @@ constexpr uint16_t NUM_LEDS = 6;
 // valor daqui e ignorado. NAO altere aqui achando que muda a pinagem da
 // tela; altere no platformio.ini.
 #ifndef TFT_MISO
-#define TFT_MISO 13
+#define TFT_MISO 17
 #endif
 
 #ifndef TFT_MOSI
-#define TFT_MOSI 11
+#define TFT_MOSI 7
 #endif
 
 #ifndef TFT_SCLK
-#define TFT_SCLK 12
+#define TFT_SCLK 15
 #endif
 
 #ifndef TFT_CS
-#define TFT_CS 10
+#define TFT_CS 4
 #endif
 
 #ifndef TFT_DC
-#define TFT_DC 9
+#define TFT_DC 6
 #endif
 
 #ifndef TFT_RST
-#define TFT_RST 14
+#define TFT_RST 5
 #endif
 
 #ifndef TFT_BL
-#define TFT_BL 15
+#define TFT_BL 16
 #endif
 
 // Chip select do controlador de touch XPT2046 (mesmo barramento SPI).
 #ifndef TOUCH_CS
-#define TOUCH_CS 8
+#define TOUCH_CS 18
 #endif
 
 // ---------------------------------------------------------------------
@@ -158,7 +201,7 @@ constexpr uint8_t NUM_CHANNELS = 6;
 // ({35,32,33,25,26,27}) porque nenhum daqueles pinos e utilizavel no
 // ESP32-S3 (flash/PSRAM/inexistentes — ver cabecalho). Todos os escolhidos
 // aqui sao GPIO livres, com entrada digital e interrupcao normais.
-constexpr uint8_t CHANNEL_PINS[NUM_CHANNELS] = {1, 2, 4, 6, 17, 18};
+constexpr uint8_t CHANNEL_PINS[NUM_CHANNELS] = {1, 2, 42, 41, 40, 39};
 
 // Resistor de pull interno usado em TODOS os pinos de canal, para
 // estabilizar o nível quando não há sensor conectado (um pino totalmente
@@ -174,14 +217,14 @@ constexpr bool CHANNEL_PULLUP = false;
 // ---------------------------------------------------------------------
 // Cartao microSD (compartilha o barramento SPI do TFT: MOSI/MISO/SCK)
 // ---------------------------------------------------------------------
-constexpr uint8_t SD_CS_PIN = 5;
+constexpr uint8_t SD_CS_PIN = 8;
 
 // ---------------------------------------------------------------------
 // Buzzer
 // ---------------------------------------------------------------------
 // Movido do GPIO13 da main: naquele projeto o 13 estava livre, aqui ele e
 // o MISO do barramento SPI da tela.
-constexpr uint8_t BUZZER_PIN = 16;
+constexpr uint8_t BUZZER_PIN = 47;
 
 // ---------------------------------------------------------------------
 // Filas, buffers e limites configuraveis

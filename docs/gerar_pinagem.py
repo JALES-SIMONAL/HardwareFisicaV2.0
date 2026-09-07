@@ -163,10 +163,10 @@ for p, s, d, o in MODULO:
         continue
     gp, alvo = resolve_ponte(d)
     if gp is not None:
-        obs = f'unir ao pino {alvo} (`{_nome_por_pino[alvo]}`)'
+        obs = f'mesma rede do pino {alvo} (`{_nome_por_pino[alvo]}`)'
         if o:
             obs += ' — ' + o
-        L.append(f'| {p} | `{s}` | GPIO{gp} *(via ponte)* | {via(gp)} | {obs} |')
+        L.append(f'| {p} | `{s}` | GPIO{gp} | {via(gp)} | {obs} |')
     else:
         L.append(f'| {p} | `{s}` | {d} | - | {o} |')
 L.append('')
@@ -187,21 +187,29 @@ L.append('')
 L.append('Ele so precisaria de fio se o firmware fosse ler o toque por interrupcao, e')
 L.append('nao le: a leitura e por consulta ao controlador, a cada volta do laco.')
 L.append('')
-L.append('### As seis pontes')
+L.append('### Redes compartilhadas (o barramento SPI)')
 L.append('')
-L.append('Sao ligacoes **locais no proprio conector** — nao viram fio ate o ESP32.')
-L.append('Touch e cartao compartilham o barramento da tela e se distinguem so pelo CS.')
+L.append('Tela, touch e cartao estao no MESMO barramento SPI e se distinguem apenas')
+L.append('pelo chip select. Na pratica isso quer dizer que cada uma das tres redes de')
+L.append('dados sai de UM pino do ESP32 e chega a TRES pinos do modulo.')
 L.append('')
-L.append('| unir estes pinos | ao pino | sinal | GPIO resultante |')
-L.append('|------------------|---------|-------|-----------------|')
+L.append('Nao ha nada de "extra" a montar: e uma rede so, com tres destinos. Numa PCB')
+L.append('e uma trilha ramificada; em fio solto, tres pontas no mesmo pino do ESP32.')
+L.append('')
+L.append('**O que costuma dar errado:** ligar apenas os pinos 6, 7 e 9 (os da tela) e')
+L.append('deixar 10, 12, 13, 16, 17 e 18 sem ligacao. A tela funciona — escrever nela')
+L.append('nao precisa de mais nada — e o toque e o cartao ficam mudos.')
+L.append('')
+L.append('| GPIO do ESP32 | sinal | pinos do modulo que recebem essa rede |')
+L.append('|---------------|-------|----------------------------------------|')
 for _alvo, _pontes in ((7, '10 (T_CLK), 18 (SD_SCK)'),
                        (6, '12 (T_DIN), 16 (SD_MOSI)'),
                        (9, '13 (T_DO), 17 (SD_MISO)')):
     _g = _gpio_por_pino[_alvo]
-    L.append(f'| {_pontes} | {_alvo} | {_nome_por_pino[_alvo]} | '
-             f'GPIO{_g} ({via(_g)}) |')
+    L.append(f'| GPIO{_g} ({via(_g)}) | {_nome_por_pino[_alvo]} | '
+             f'{_alvo} ({_nome_por_pino[_alvo]}), {_pontes} |')
 L.append('')
-L.append('Sem elas a tela funciona, mas o toque nao responde e o cartao nao monta.')
+L.append('Faltando qualquer um desses destinos, o dispositivo correspondente fica mudo.')
 L.append('')
 L.append('## Sensores e indicadores — coluna direita do header')
 L.append('')
@@ -302,7 +310,7 @@ for pino, sinal, destino, _obs in MODULO:
     gp, alvo = resolve_ponte(destino)
     if gp is not None:
         H.append(f'//   {pino:>4d}  {sinal:<11s}  {gp:>5s}  {via(gp)}  '
-                 f'ponte com o pino {alvo}')
+                 f'mesma rede do pino {alvo}')
     else:
         H.append(f'//   {pino:>4d}  {sinal:<11s}  {"--":>5s}  {destino}')
 H.append('//')

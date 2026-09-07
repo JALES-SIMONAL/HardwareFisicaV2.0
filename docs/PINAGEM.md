@@ -41,15 +41,15 @@ cruzarem na PCB.
 | 7 | `SCK` | GPIO16 | E-09 | clock do barramento |
 | 8 | `LED` | GPIO17 | E-10 | backlight, PWM no canal LEDC 2 |
 | 9 | `SDO(MISO)` | GPIO18 | E-11 | dado do modulo para o ESP32 |
-| 10 | `T_CLK` | GPIO16 *(via ponte)* | E-09 | unir ao pino 7 (`SCK`) — clock do touch |
+| 10 | `T_CLK` | GPIO16 | E-09 | mesma rede do pino 7 (`SCK`) — clock do touch |
 | 11 | `T_CS` | GPIO8 | E-12 | chip select do TOUCH |
-| 12 | `T_DIN` | GPIO15 *(via ponte)* | E-08 | unir ao pino 6 (`MOSI`) — MOSI do touch |
-| 13 | `T_DO` | GPIO18 *(via ponte)* | E-11 | unir ao pino 9 (`SDO(MISO)`) — MISO do touch |
+| 12 | `T_DIN` | GPIO15 | E-08 | mesma rede do pino 6 (`MOSI`) — MOSI do touch |
+| 13 | `T_DO` | GPIO18 | E-11 | mesma rede do pino 9 (`SDO(MISO)`) — MISO do touch |
 | 14 | `T_IRQ` | deixar SOLTO | - | saida do XPT2046 — nunca amarrar a 3V3 ou GND |
 | 15 | `SD_CS` | GPIO9 | E-15 | chip select do CARTAO |
-| 16 | `SD_MOSI` | GPIO15 *(via ponte)* | E-08 | unir ao pino 6 (`MOSI`) |
-| 17 | `SD_MISO` | GPIO18 *(via ponte)* | E-11 | unir ao pino 9 (`SDO(MISO)`) |
-| 18 | `SD_SCK` | GPIO16 *(via ponte)* | E-09 | unir ao pino 7 (`SCK`) |
+| 16 | `SD_MOSI` | GPIO15 | E-08 | mesma rede do pino 6 (`MOSI`) |
+| 17 | `SD_MISO` | GPIO18 | E-11 | mesma rede do pino 9 (`SDO(MISO)`) |
+| 18 | `SD_SCK` | GPIO16 | E-09 | mesma rede do pino 7 (`SCK`) |
 
 ### Por que o T_IRQ (pino 14) fica solto
 
@@ -68,18 +68,26 @@ nunca flutua — ela e quem manda no nivel.
 Ele so precisaria de fio se o firmware fosse ler o toque por interrupcao, e
 nao le: a leitura e por consulta ao controlador, a cada volta do laco.
 
-### As seis pontes
+### Redes compartilhadas (o barramento SPI)
 
-Sao ligacoes **locais no proprio conector** — nao viram fio ate o ESP32.
-Touch e cartao compartilham o barramento da tela e se distinguem so pelo CS.
+Tela, touch e cartao estao no MESMO barramento SPI e se distinguem apenas
+pelo chip select. Na pratica isso quer dizer que cada uma das tres redes de
+dados sai de UM pino do ESP32 e chega a TRES pinos do modulo.
 
-| unir estes pinos | ao pino | sinal | GPIO resultante |
-|------------------|---------|-------|-----------------|
-| 10 (T_CLK), 18 (SD_SCK) | 7 | SCK | GPIO16 (E-09) |
-| 12 (T_DIN), 16 (SD_MOSI) | 6 | MOSI | GPIO15 (E-08) |
-| 13 (T_DO), 17 (SD_MISO) | 9 | SDO(MISO) | GPIO18 (E-11) |
+Nao ha nada de "extra" a montar: e uma rede so, com tres destinos. Numa PCB
+e uma trilha ramificada; em fio solto, tres pontas no mesmo pino do ESP32.
 
-Sem elas a tela funciona, mas o toque nao responde e o cartao nao monta.
+**O que costuma dar errado:** ligar apenas os pinos 6, 7 e 9 (os da tela) e
+deixar 10, 12, 13, 16, 17 e 18 sem ligacao. A tela funciona — escrever nela
+nao precisa de mais nada — e o toque e o cartao ficam mudos.
+
+| GPIO do ESP32 | sinal | pinos do modulo que recebem essa rede |
+|---------------|-------|----------------------------------------|
+| GPIO16 (E-09) | SCK | 7 (SCK), 10 (T_CLK), 18 (SD_SCK) |
+| GPIO15 (E-08) | MOSI | 6 (MOSI), 12 (T_DIN), 16 (SD_MOSI) |
+| GPIO18 (E-11) | SDO(MISO) | 9 (SDO(MISO)), 13 (T_DO), 17 (SD_MISO) |
+
+Faltando qualquer um desses destinos, o dispositivo correspondente fica mudo.
 
 ## Sensores e indicadores — coluna direita do header
 

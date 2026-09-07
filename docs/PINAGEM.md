@@ -41,26 +41,26 @@ cruzarem na PCB.
 | 7 | `SCK` | GPIO15 | E-08 | clock do barramento |
 | 8 | `LED` | GPIO16 | E-09 | backlight, PWM no canal LEDC 2 |
 | 9 | `SDO(MISO)` | GPIO17 | E-10 | dado do modulo para o ESP32 |
-| 10 | `T_CLK` | ponte -> pino 7 | - | clock do touch |
+| 10 | `T_CLK` | GPIO15 *(via ponte)* | E-08 | unir ao pino 7 (`SCK`) — clock do touch |
 | 11 | `T_CS` | GPIO18 | E-11 | chip select do TOUCH |
-| 12 | `T_DIN` | ponte -> pino 6 | - | MOSI do touch |
-| 13 | `T_DO` | ponte -> pino 9 | - | MISO do touch |
+| 12 | `T_DIN` | GPIO7 *(via ponte)* | E-07 | unir ao pino 6 (`MOSI`) — MOSI do touch |
+| 13 | `T_DO` | GPIO17 *(via ponte)* | E-10 | unir ao pino 9 (`SDO(MISO)`) — MISO do touch |
 | 14 | `T_IRQ` | NAO LIGAR | - | o firmware le o toque por consulta |
 | 15 | `SD_CS` | GPIO9 | E-15 | chip select do CARTAO |
-| 16 | `SD_MOSI` | ponte -> pino 6 | - |  |
-| 17 | `SD_MISO` | ponte -> pino 9 | - |  |
-| 18 | `SD_SCK` | ponte -> pino 7 | - |  |
+| 16 | `SD_MOSI` | GPIO7 *(via ponte)* | E-07 | unir ao pino 6 (`MOSI`) |
+| 17 | `SD_MISO` | GPIO17 *(via ponte)* | E-10 | unir ao pino 9 (`SDO(MISO)`) |
+| 18 | `SD_SCK` | GPIO15 *(via ponte)* | E-08 | unir ao pino 7 (`SCK`) |
 
 ### As seis pontes
 
 Sao ligacoes **locais no proprio conector** — nao viram fio ate o ESP32.
 Touch e cartao compartilham o barramento da tela e se distinguem so pelo CS.
 
-| unir estes pinos | ao pino | sinal |
-|------------------|---------|-------|
-| 10 (T_CLK), 18 (SD_SCK) | 7 | SCK |
-| 12 (T_DIN), 16 (SD_MOSI) | 6 | MOSI |
-| 13 (T_DO), 17 (SD_MISO) | 9 | MISO |
+| unir estes pinos | ao pino | sinal | GPIO resultante |
+|------------------|---------|-------|-----------------|
+| 10 (T_CLK), 18 (SD_SCK) | 7 | SCK | GPIO15 (E-08) |
+| 12 (T_DIN), 16 (SD_MOSI) | 6 | MOSI | GPIO7 (E-07) |
+| 13 (T_DO), 17 (SD_MISO) | 9 | SDO(MISO) | GPIO17 (E-10) |
 
 Sem elas a tela funciona, mas o toque nao responde e o cartao nao monta.
 

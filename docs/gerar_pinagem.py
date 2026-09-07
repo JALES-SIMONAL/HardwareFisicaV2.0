@@ -78,6 +78,22 @@ MODULO = [
     (18, 'SD_SCK', 'ponte -> pino 7', ''),
 ]
 
+# Um pino em ponte NAO fica sem GPIO: pela ponte ele chega ao mesmo GPIO do
+# pino de destino. Mostrar "--" ali dava a impressao de sinal solto, quando
+# na verdade e o proprio barramento compartilhado. Aqui o GPIO e resolvido a
+# partir do pino alvo, para a tabela mostrar o quadro eletrico completo.
+_gpio_por_pino = {pino: d[4:] for pino, _s, d, _o in MODULO if d.startswith('GPIO')}
+_nome_por_pino = {pino: sinal for pino, sinal, _d, _o in MODULO}
+
+def resolve_ponte(destino):
+    """('ponte -> pino 7') -> (gpio, alvo) ; ou (None, None)."""
+    m = re.match(r'ponte -> pino (\d+)$', destino)
+    if not m:
+        return None, None
+    alvo = int(m.group(1))
+    return _gpio_por_pino.get(alvo), alvo
+
+
 OUTROS = ([(f'Canal {i}', g, 'sensor, entrada com interrupcao')
            for i, g in enumerate(canais, 1)] +
           [('NeoPixel DIN', ct['PIN_NEO'], f'{ct["NUM_LEDS"]} LEDs WS2812 em serie'),
@@ -141,19 +157,32 @@ L.append('')
 L.append('| pino | sinal | liga em | posicao | observacao |')
 L.append('|-----:|-------|---------|---------|------------|')
 for p, s, d, o in MODULO:
-    g = d.replace('GPIO', '') if d.startswith('GPIO') else ''
-    L.append(f'| {p} | `{s}` | {d} | {via(g) if g else "-"} | {o} |')
+    if d.startswith('GPIO'):
+        g = d[4:]
+        L.append(f'| {p} | `{s}` | GPIO{g} | {via(g)} | {o} |')
+        continue
+    gp, alvo = resolve_ponte(d)
+    if gp is not None:
+        obs = f'unir ao pino {alvo} (`{_nome_por_pino[alvo]}`)'
+        if o:
+            obs += ' — ' + o
+        L.append(f'| {p} | `{s}` | GPIO{gp} *(via ponte)* | {via(gp)} | {obs} |')
+    else:
+        L.append(f'| {p} | `{s}` | {d} | - | {o} |')
 L.append('')
 L.append('### As seis pontes')
 L.append('')
 L.append('Sao ligacoes **locais no proprio conector** — nao viram fio ate o ESP32.')
 L.append('Touch e cartao compartilham o barramento da tela e se distinguem so pelo CS.')
 L.append('')
-L.append('| unir estes pinos | ao pino | sinal |')
-L.append('|------------------|---------|-------|')
-L.append('| 10 (T_CLK), 18 (SD_SCK) | 7 | SCK |')
-L.append('| 12 (T_DIN), 16 (SD_MOSI) | 6 | MOSI |')
-L.append('| 13 (T_DO), 17 (SD_MISO) | 9 | MISO |')
+L.append('| unir estes pinos | ao pino | sinal | GPIO resultante |')
+L.append('|------------------|---------|-------|-----------------|')
+for _alvo, _pontes in ((7, '10 (T_CLK), 18 (SD_SCK)'),
+                       (6, '12 (T_DIN), 16 (SD_MOSI)'),
+                       (9, '13 (T_DO), 17 (SD_MISO)')):
+    _g = _gpio_por_pino[_alvo]
+    L.append(f'| {_pontes} | {_alvo} | {_nome_por_pino[_alvo]} | '
+             f'GPIO{_g} ({via(_g)}) |')
 L.append('')
 L.append('Sem elas a tela funciona, mas o toque nao responde e o cartao nao monta.')
 L.append('')
@@ -252,6 +281,11 @@ for pino, sinal, destino, _obs in MODULO:
     if destino.startswith('GPIO'):
         g = destino[4:]
         H.append(f'//   {pino:>4d}  {sinal:<11s}  {g:>5s}  {via(g)}')
+        continue
+    gp, alvo = resolve_ponte(destino)
+    if gp is not None:
+        H.append(f'//   {pino:>4d}  {sinal:<11s}  {gp:>5s}  {via(gp)}  '
+                 f'ponte com o pino {alvo}')
     else:
         H.append(f'//   {pino:>4d}  {sinal:<11s}  {"--":>5s}  {destino}')
 H.append('//')

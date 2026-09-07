@@ -57,15 +57,15 @@
 //      7  SCK             15  E-08
 //      8  LED             16  E-09
 //      9  SDO(MISO)       17  E-10
-//     10  T_CLK           --  ponte -> pino 7
+//     10  T_CLK           15  E-08  ponte com o pino 7
 //     11  T_CS            18  E-11
-//     12  T_DIN           --  ponte -> pino 6
-//     13  T_DO            --  ponte -> pino 9
+//     12  T_DIN            7  E-07  ponte com o pino 6
+//     13  T_DO            17  E-10  ponte com o pino 9
 //     14  T_IRQ           --  NAO LIGAR
 //     15  SD_CS            9  E-15
-//     16  SD_MOSI         --  ponte -> pino 6
-//     17  SD_MISO         --  ponte -> pino 9
-//     18  SD_SCK          --  ponte -> pino 7
+//     16  SD_MOSI          7  E-07  ponte com o pino 6
+//     17  SD_MISO         17  E-10  ponte com o pino 9
+//     18  SD_SCK          15  E-08  ponte com o pino 7
 //
 // Sensores e indicadores — coluna direita:
 //

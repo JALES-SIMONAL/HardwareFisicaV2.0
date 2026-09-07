@@ -18,10 +18,19 @@ canais = [c.strip() for c in
           re.search(r'CHANNEL_PINS\[NUM_CHANNELS\] = \{([^}]*)\}', hpp).group(1).split(',')]
 
 # Ordem fisica das vias do header do ESP32-S3-DevKitC-1, de cima para baixo.
+# Ordem FISICA das duas fileiras do ESP32-S3-DevKitC-1, de cima para baixo
+# com o conector USB voltado para cima, 22 vias cada. Conferida contra o
+# simbolo do esquema do projeto.
+#
+# ATENCAO: GPIO19 e GPIO20 (USB nativo) ficam na fileira DIREITA, e sao os
+# trilhos 5V/GND que fecham a ESQUERDA. Ter isso trocado desloca todos os
+# ordinais a partir da metade da fileira — foi o que aconteceu antes, e o
+# erro so aparece na conferencia contra a placa, porque a tabela continua
+# coerente consigo mesma.
 ESQ = ['3V3', '3V3', 'RST', '4', '5', '6', '7', '15', '16', '17', '18', '8',
-       '19', '20', '3', '46', '9', '10', '11', '12', '13', '14']
+       '3', '46', '9', '10', '11', '12', '13', '14', '5V', 'GND']
 DIR = ['GND', '43', '44', '1', '2', '42', '41', '40', '39', '38', '37', '36',
-       '35', '0', '45', '48', '47', '21', 'GND', 'GND', '5V', 'GND']
+       '35', '0', '45', '48', '47', '21', '20', '19', 'GND', 'GND']
 
 
 def via(gpio):
@@ -40,9 +49,16 @@ def via(gpio):
     return '-'
 
 
+def posicoes(nome):
+    """Todas as posicoes do header que oferecem um trilho (3V3, 5V, GND)."""
+    r = [f'E-{i+1:02d}' for i, p in enumerate(ESQ) if p == nome]
+    r += [f'D-{i+1:02d}' for i, p in enumerate(DIR) if p == nome]
+    return ', '.join(r)
+
+
 # (pino, sinal impresso, destino, observacao)
 MODULO = [
-    (1, 'VCC', 'ver alimentacao', 'com J1 aberto = 5V; com J1 fechado = 3V3'),
+    (1, 'VCC', '5V', 'com J1 aberto (padrao). Com J1 fechado, ligar em 3V3'),
     (2, 'GND', 'GND', 'comum a tudo'),
     (3, 'CS', f'GPIO{fl["TFT_CS"]}', 'chip select da TELA'),
     (4, 'RESET', f'GPIO{fl["TFT_RST"]}', ''),
@@ -148,6 +164,24 @@ L.append('|-------|---------|---------|------------|')
 for s, g, o in OUTROS:
     L.append(f'| {s} | GPIO{g} | {via(g)} | {o} |')
 L.append('')
+L.append('## Alimentacao e terra')
+L.append('')
+L.append('Nao saem de GPIO — sao os trilhos do header. Um mesmo trilho atende varios')
+L.append('consumidores; as posicoes abaixo sao todas equivalentes, escolha a mais')
+L.append('proxima na placa.')
+L.append('')
+L.append('| trilho | posicoes no header | alimenta |')
+L.append('|--------|--------------------|----------|')
+L.append('| 3V3 | ' + posicoes('3V3') + ' | sensores dos 6 canais; NeoPixel |')
+L.append('| 5V | ' + posicoes('5V') + ' | VCC do modulo da tela (pino 1) |')
+L.append('| GND | ' + posicoes('GND') + ' | modulo da tela, sensores, NeoPixel, buzzer |')
+L.append('')
+L.append('O **NeoPixel alimentado em 3V3** e proposital: o WS2812 exige nivel logico')
+L.append('alto acima de 0,7 x VDD na entrada de dados. Alimentado em 5V isso daria')
+L.append('3,5V, e o ESP32 entrega no maximo 3,3V — o dado ficaria no limite, com falhas')
+L.append('intermitentes. Em 3V3 o limiar cai para 2,3V e a margem fica confortavel. O')
+L.append('custo e brilho maximo um pouco menor.')
+L.append('')
 L.append('## Chip selects (o que separa os tres dispositivos do barramento)')
 L.append('')
 L.append('| dispositivo | CS |')
@@ -225,6 +259,16 @@ H.append('// Sensores e indicadores — coluna direita:')
 H.append('//')
 for sinal, g, _o in OUTROS:
     H.append(f'//   {sinal:<14s} GPIO{g:<4s} {via(g)}')
+H.append('//')
+H.append('// Alimentacao (trilhos do header, nao saem de GPIO):')
+H.append('//   3V3  ' + posicoes('3V3') + '   sensores dos canais, NeoPixel')
+H.append('//   5V   ' + posicoes('5V') + '   VCC do modulo da tela (pino 1)')
+H.append('//   GND  ' + posicoes('GND') + '')
+H.append('//        tudo: modulo, sensores, NeoPixel, buzzer')
+H.append('//')
+H.append('// NeoPixel em 3V3 de proposito: o WS2812 pede nivel alto acima de')
+H.append('// 0,7 x VDD no dado. Em 5V isso seria 3,5V e o ESP32 entrega 3,3V —')
+H.append('// ficaria no limite. Em 3V3 o limiar cai para 2,3V.')
 H.append('//')
 H.append('// GPIO reservados nesta placa: 26..32 (flash), 33..37 (PSRAM octal),')
 H.append('// 19/20 (USB nativo), 43/44 (UART0), 0/3/45/46 (strapping), 48 (LED da')

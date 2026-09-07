@@ -48,7 +48,7 @@
 //
 //   pino  sinal        GPIO   posicao no header
 //   ----  -----------  -----  -----------------
-//      1  VCC             --  ver alimentacao
+//      1  VCC             --  5V
 //      2  GND             --  GND
 //      3  CS               4  E-04
 //      4  RESET            5  E-05
@@ -62,7 +62,7 @@
 //     12  T_DIN           --  ponte -> pino 6
 //     13  T_DO            --  ponte -> pino 9
 //     14  T_IRQ           --  NAO LIGAR
-//     15  SD_CS            9  E-17
+//     15  SD_CS            9  E-15
 //     16  SD_MOSI         --  ponte -> pino 6
 //     17  SD_MISO         --  ponte -> pino 9
 //     18  SD_SCK          --  ponte -> pino 7
@@ -77,6 +77,16 @@
 //   Canal 6        GPIO39   D-09
 //   NeoPixel DIN   GPIO38   D-10
 //   Buzzer +       GPIO47   D-17
+//
+// Alimentacao (trilhos do header, nao saem de GPIO):
+//   3V3  E-01, E-02   sensores dos canais, NeoPixel
+//   5V   E-21   VCC do modulo da tela (pino 1)
+//   GND  E-22, D-01, D-21, D-22
+//        tudo: modulo, sensores, NeoPixel, buzzer
+//
+// NeoPixel em 3V3 de proposito: o WS2812 pede nivel alto acima de
+// 0,7 x VDD no dado. Em 5V isso seria 3,5V e o ESP32 entrega 3,3V —
+// ficaria no limite. Em 3V3 o limiar cai para 2,3V.
 //
 // GPIO reservados nesta placa: 26..32 (flash), 33..37 (PSRAM octal),
 // 19/20 (USB nativo), 43/44 (UART0), 0/3/45/46 (strapping), 48 (LED da

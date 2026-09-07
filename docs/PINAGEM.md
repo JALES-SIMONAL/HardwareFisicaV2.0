@@ -21,8 +21,8 @@ paralelo. Se ela pular para tras em alguma linha, aqueles dois fios se cruzam.
 
 Ordem das fileiras (a de referencia para os ordinais):
 
-- **E** (esquerda): 3V3, 3V3, RST, 4, 5, 6, 7, 15, 16, 17, 18, 8, 19, 20, 3, 46, 9, 10, 11, 12, 13, 14
-- **D** (direita): GND, 43, 44, 1, 2, 42, 41, 40, 39, 38, 37, 36, 35, 0, 45, 48, 47, 21, GND, GND, 5V, GND
+- **E** (esquerda): 3V3, 3V3, RST, 4, 5, 6, 7, 15, 16, 17, 18, 8, 3, 46, 9, 10, 11, 12, 13, 14, 5V, GND
+- **D** (direita): GND, 43, 44, 1, 2, 42, 41, 40, 39, 38, 37, 36, 35, 0, 45, 48, 47, 21, 20, 19, GND, GND
 
 > As vias sobem junto com os pinos do conector (coluna de GPIO: 4, 5, 6, 7, 15, 16, 17, 18, 9), o que corresponde ao modulo montado na orientacao normal. Se o display for virado de cabeca para baixo, esta ordem passa a cruzar os fios em leque e a coluna precisa ser invertida.
 A ordem das vias segue a ordem dos pinos do conector, para os fios nao se
@@ -32,7 +32,7 @@ cruzarem na PCB.
 
 | pino | sinal | liga em | posicao | observacao |
 |-----:|-------|---------|---------|------------|
-| 1 | `VCC` | ver alimentacao | - | com J1 aberto = 5V; com J1 fechado = 3V3 |
+| 1 | `VCC` | 5V | - | com J1 aberto (padrao). Com J1 fechado, ligar em 3V3 |
 | 2 | `GND` | GND | - | comum a tudo |
 | 3 | `CS` | GPIO4 | E-04 | chip select da TELA |
 | 4 | `RESET` | GPIO5 | E-05 |  |
@@ -46,7 +46,7 @@ cruzarem na PCB.
 | 12 | `T_DIN` | ponte -> pino 6 | - | MOSI do touch |
 | 13 | `T_DO` | ponte -> pino 9 | - | MISO do touch |
 | 14 | `T_IRQ` | NAO LIGAR | - | o firmware le o toque por consulta |
-| 15 | `SD_CS` | GPIO9 | E-17 | chip select do CARTAO |
+| 15 | `SD_CS` | GPIO9 | E-15 | chip select do CARTAO |
 | 16 | `SD_MOSI` | ponte -> pino 6 | - |  |
 | 17 | `SD_MISO` | ponte -> pino 9 | - |  |
 | 18 | `SD_SCK` | ponte -> pino 7 | - |  |
@@ -76,6 +76,24 @@ Sem elas a tela funciona, mas o toque nao responde e o cartao nao monta.
 | Canal 6 | GPIO39 | D-09 | sensor, entrada com interrupcao |
 | NeoPixel DIN | GPIO38 | D-10 | 6 LEDs WS2812 em serie |
 | Buzzer + | GPIO47 | D-17 | passivo, acionado por tone() |
+
+## Alimentacao e terra
+
+Nao saem de GPIO — sao os trilhos do header. Um mesmo trilho atende varios
+consumidores; as posicoes abaixo sao todas equivalentes, escolha a mais
+proxima na placa.
+
+| trilho | posicoes no header | alimenta |
+|--------|--------------------|----------|
+| 3V3 | E-01, E-02 | sensores dos 6 canais; NeoPixel |
+| 5V | E-21 | VCC do modulo da tela (pino 1) |
+| GND | E-22, D-01, D-21, D-22 | modulo da tela, sensores, NeoPixel, buzzer |
+
+O **NeoPixel alimentado em 3V3** e proposital: o WS2812 exige nivel logico
+alto acima de 0,7 x VDD na entrada de dados. Alimentado em 5V isso daria
+3,5V, e o ESP32 entrega no maximo 3,3V — o dado ficaria no limite, com falhas
+intermitentes. Em 3V3 o limiar cai para 2,3V e a margem fica confortavel. O
+custo e brilho maximo um pouco menor.
 
 ## Chip selects (o que separa os tres dispositivos do barramento)
 

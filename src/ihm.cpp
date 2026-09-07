@@ -653,6 +653,47 @@ bool lerToqueBruto(int16_t& x, int16_t& y) {
   return true;
 }
 
+
+// Le o XPT2046 CRU por alguns segundos e imprime. Roda ANTES da calibracao
+// de proposito: se o controlador nao responde, tft.calibrateTouch() pode
+// concluir com valores de lixo e gravar uma calibracao invalida, deixando
+// toqueOk em true com o toque morto — o diagnostico ficaria escondido atras
+// do proprio defeito.
+//
+// Como ler a saida:
+//   z sempre 0            -> o controlador nao responde. Verifique as tres
+//                            pontes (pinos 10, 12 e 13 unidos aos 7, 6 e 9)
+//                            e o T_CS. O display funcionar NAO descarta
+//                            isso: escrever na tela nao usa o MISO nem o
+//                            T_CS, e o toque precisa dos dois.
+//   z sempre no maximo    -> linha presa; MISO em curto ou sem pull.
+//   z varia ao tocar      -> o controlador esta bom, o problema e a
+//                            calibracao ou o mapeamento das coordenadas.
+void diagnosticarToque() {
+  constexpr uint32_t DURACAO_MS = 4000;
+  Serial.println("[TOUCH][DIAG] Leitura crua por 4s — TOQUE NA TELA AGORA");
+  Serial.println("[TOUCH][DIAG]   z=0 sempre -> controlador mudo (pontes/T_CS)");
+  Serial.flush();
+
+  uint16_t zMin = 0xFFFF, zMax = 0;
+  const uint32_t inicio = millis();
+  while (millis() - inicio < DURACAO_MS) {
+    uint16_t x = 0, y = 0;
+    const uint16_t z = tft.getTouchRawZ();
+    tft.getTouchRaw(&x, &y);
+    if (z < zMin) zMin = z;
+    if (z > zMax) zMax = z;
+    Serial.printf("[TOUCH][DIAG] z=%5u  x=%5u  y=%5u\n", z, x, y);
+    Serial.flush();
+    delay(200);
+  }
+
+  Serial.printf("[TOUCH][DIAG] z variou de %u a %u -> %s\n", zMin, zMax,
+                (zMax == zMin) ? "SEM VARIACAO: controlador nao respondeu"
+                               : "variou: controlador respondendo");
+  Serial.flush();
+}
+
 }  // namespace
 
 // Definida bem abaixo, junto das demais primitivas de desenho, mas
@@ -741,6 +782,8 @@ void init() {
   tft.fillScreen(COR_FUNDO);
 
   Serial.println("[IHM] 4/7 lendo calibracao do toque na NVS"); Serial.flush();
+  diagnosticarToque();
+
   // ---- Calibração do touch ----
   prefsToque.begin("ihm", true);
   const uint32_t assinaturaSalva = prefsToque.getULong("sigtoque", 0);

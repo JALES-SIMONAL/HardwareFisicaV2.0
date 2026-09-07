@@ -32,7 +32,11 @@
 // do DevKitC-1. Dois fios so se cruzam quando a ordem em que saem do
 // conector difere da ordem em que chegam ao header — entao cada grupo sobe
 // pelo header na sequencia do seu proprio conector. Por isso os GPIO
-// parecem fora de ordem: e a ordem das VIAS que importa aqui.
+// parecem fora de ordem: e a ordem das POSICOES que importa aqui.
+//
+// Posicao: E-04 = fileira esquerda, 4o pino; D-17 = fileira direita, 17o.
+// Contagem DE CIMA PARA BAIXO com o conector USB voltado para cima; cada
+// fileira tem 22 pinos. Nao e o numero do GPIO nem o do pino do modulo.
 //
 // As vias sobem junto com os pinos do conector (coluna de GPIO: 4, 5,
 // 6, 7, 15, 16, 17, 18, 9), o que corresponde ao modulo montado na
@@ -42,37 +46,37 @@
 //
 // Modulo da tela (TJCTM24028-SPI) — coluna esquerda:
 //
-//   pino  sinal        GPIO   via
-//   ----  -----------  -----  ---------
+//   pino  sinal        GPIO   posicao no header
+//   ----  -----------  -----  -----------------
 //      1  VCC             --  ver alimentacao
 //      2  GND             --  GND
-//      3  CS               4  esq 4
-//      4  RESET            5  esq 5
-//      5  D/C              6  esq 6
-//      6  MOSI             7  esq 7
-//      7  SCK             15  esq 8
-//      8  LED             16  esq 9
-//      9  SDO(MISO)       17  esq 10
+//      3  CS               4  E-04
+//      4  RESET            5  E-05
+//      5  D/C              6  E-06
+//      6  MOSI             7  E-07
+//      7  SCK             15  E-08
+//      8  LED             16  E-09
+//      9  SDO(MISO)       17  E-10
 //     10  T_CLK           --  ponte -> pino 7
-//     11  T_CS            18  esq 11
+//     11  T_CS            18  E-11
 //     12  T_DIN           --  ponte -> pino 6
 //     13  T_DO            --  ponte -> pino 9
 //     14  T_IRQ           --  NAO LIGAR
-//     15  SD_CS            9  esq 17
+//     15  SD_CS            9  E-17
 //     16  SD_MOSI         --  ponte -> pino 6
 //     17  SD_MISO         --  ponte -> pino 9
 //     18  SD_SCK          --  ponte -> pino 7
 //
 // Sensores e indicadores — coluna direita:
 //
-//   Canal 1        GPIO1    dir 4
-//   Canal 2        GPIO2    dir 5
-//   Canal 3        GPIO42   dir 6
-//   Canal 4        GPIO41   dir 7
-//   Canal 5        GPIO40   dir 8
-//   Canal 6        GPIO39   dir 9
-//   NeoPixel DIN   GPIO38   dir 10
-//   Buzzer +       GPIO47   dir 17
+//   Canal 1        GPIO1    D-04
+//   Canal 2        GPIO2    D-05
+//   Canal 3        GPIO42   D-06
+//   Canal 4        GPIO41   D-07
+//   Canal 5        GPIO40   D-08
+//   Canal 6        GPIO39   D-09
+//   NeoPixel DIN   GPIO38   D-10
+//   Buzzer +       GPIO47   D-17
 //
 // GPIO reservados nesta placa: 26..32 (flash), 33..37 (PSRAM octal),
 // 19/20 (USB nativo), 43/44 (UART0), 0/3/45/46 (strapping), 48 (LED da

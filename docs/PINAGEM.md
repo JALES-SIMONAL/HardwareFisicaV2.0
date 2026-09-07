@@ -6,7 +6,23 @@
 
 Placa: **ESP32-S3-WROOM-1 N16R8** (DevKitC-1) · Display: **TJCTM24028-SPI**
 
-A coluna *via* e a posicao fisica no header (esq/dir, de cima para baixo).
+### Como ler a coluna *posicao*
+
+`E-04` = fileira **esquerda**, 4o pino; `D-17` = fileira **direita**, 17o pino.
+
+O numero e a ordem FISICA no header, contada **de cima para baixo com o
+conector USB voltado para cima** — cada fileira do ESP32-S3-DevKitC-1 tem 22
+pinos. Nao e o numero do GPIO nem o numero do pino do modulo: e so a posicao
+na barra de pinos.
+
+Ela existe para uma coisa so: conferir que os fios nao se cruzam. Se a coluna
+subir na mesma ordem em que os pinos saem do conector, o chicote fica
+paralelo. Se ela pular para tras em alguma linha, aqueles dois fios se cruzam.
+
+Ordem das fileiras (a de referencia para os ordinais):
+
+- **E** (esquerda): 3V3, 3V3, RST, 4, 5, 6, 7, 15, 16, 17, 18, 8, 19, 20, 3, 46, 9, 10, 11, 12, 13, 14
+- **D** (direita): GND, 43, 44, 1, 2, 42, 41, 40, 39, 38, 37, 36, 35, 0, 45, 48, 47, 21, GND, GND, 5V, GND
 
 > As vias sobem junto com os pinos do conector (coluna de GPIO: 4, 5, 6, 7, 15, 16, 17, 18, 9), o que corresponde ao modulo montado na orientacao normal. Se o display for virado de cabeca para baixo, esta ordem passa a cruzar os fios em leque e a coluna precisa ser invertida.
 A ordem das vias segue a ordem dos pinos do conector, para os fios nao se
@@ -14,23 +30,23 @@ cruzarem na PCB.
 
 ## Modulo da tela (18 pinos) — coluna esquerda do header
 
-| pino | sinal | liga em | via | observacao |
-|-----:|-------|---------|-----|------------|
+| pino | sinal | liga em | posicao | observacao |
+|-----:|-------|---------|---------|------------|
 | 1 | `VCC` | ver alimentacao | - | com J1 aberto = 5V; com J1 fechado = 3V3 |
 | 2 | `GND` | GND | - | comum a tudo |
-| 3 | `CS` | GPIO4 | esq 4 | chip select da TELA |
-| 4 | `RESET` | GPIO5 | esq 5 |  |
-| 5 | `D/C` | GPIO6 | esq 6 | dado / comando |
-| 6 | `MOSI` | GPIO7 | esq 7 | dado do ESP32 para o modulo |
-| 7 | `SCK` | GPIO15 | esq 8 | clock do barramento |
-| 8 | `LED` | GPIO16 | esq 9 | backlight, PWM no canal LEDC 2 |
-| 9 | `SDO(MISO)` | GPIO17 | esq 10 | dado do modulo para o ESP32 |
+| 3 | `CS` | GPIO4 | E-04 | chip select da TELA |
+| 4 | `RESET` | GPIO5 | E-05 |  |
+| 5 | `D/C` | GPIO6 | E-06 | dado / comando |
+| 6 | `MOSI` | GPIO7 | E-07 | dado do ESP32 para o modulo |
+| 7 | `SCK` | GPIO15 | E-08 | clock do barramento |
+| 8 | `LED` | GPIO16 | E-09 | backlight, PWM no canal LEDC 2 |
+| 9 | `SDO(MISO)` | GPIO17 | E-10 | dado do modulo para o ESP32 |
 | 10 | `T_CLK` | ponte -> pino 7 | - | clock do touch |
-| 11 | `T_CS` | GPIO18 | esq 11 | chip select do TOUCH |
+| 11 | `T_CS` | GPIO18 | E-11 | chip select do TOUCH |
 | 12 | `T_DIN` | ponte -> pino 6 | - | MOSI do touch |
 | 13 | `T_DO` | ponte -> pino 9 | - | MISO do touch |
 | 14 | `T_IRQ` | NAO LIGAR | - | o firmware le o toque por consulta |
-| 15 | `SD_CS` | GPIO9 | esq 17 | chip select do CARTAO |
+| 15 | `SD_CS` | GPIO9 | E-17 | chip select do CARTAO |
 | 16 | `SD_MOSI` | ponte -> pino 6 | - |  |
 | 17 | `SD_MISO` | ponte -> pino 9 | - |  |
 | 18 | `SD_SCK` | ponte -> pino 7 | - |  |
@@ -50,16 +66,16 @@ Sem elas a tela funciona, mas o toque nao responde e o cartao nao monta.
 
 ## Sensores e indicadores — coluna direita do header
 
-| sinal | liga em | via | observacao |
-|-------|---------|-----|------------|
-| Canal 1 | GPIO1 | dir 4 | sensor, entrada com interrupcao |
-| Canal 2 | GPIO2 | dir 5 | sensor, entrada com interrupcao |
-| Canal 3 | GPIO42 | dir 6 | sensor, entrada com interrupcao |
-| Canal 4 | GPIO41 | dir 7 | sensor, entrada com interrupcao |
-| Canal 5 | GPIO40 | dir 8 | sensor, entrada com interrupcao |
-| Canal 6 | GPIO39 | dir 9 | sensor, entrada com interrupcao |
-| NeoPixel DIN | GPIO38 | dir 10 | 6 LEDs WS2812 em serie |
-| Buzzer + | GPIO47 | dir 17 | passivo, acionado por tone() |
+| sinal | liga em | posicao | observacao |
+|-------|---------|---------|------------|
+| Canal 1 | GPIO1 | D-04 | sensor, entrada com interrupcao |
+| Canal 2 | GPIO2 | D-05 | sensor, entrada com interrupcao |
+| Canal 3 | GPIO42 | D-06 | sensor, entrada com interrupcao |
+| Canal 4 | GPIO41 | D-07 | sensor, entrada com interrupcao |
+| Canal 5 | GPIO40 | D-08 | sensor, entrada com interrupcao |
+| Canal 6 | GPIO39 | D-09 | sensor, entrada com interrupcao |
+| NeoPixel DIN | GPIO38 | D-10 | 6 LEDs WS2812 em serie |
+| Buzzer + | GPIO47 | D-17 | passivo, acionado por tone() |
 
 ## Chip selects (o que separa os tres dispositivos do barramento)
 

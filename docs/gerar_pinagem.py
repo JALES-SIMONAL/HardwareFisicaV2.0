@@ -25,10 +25,18 @@ DIR = ['GND', '43', '44', '1', '2', '42', '41', '40', '39', '38', '37', '36',
 
 
 def via(gpio):
+    """Posicao FISICA do pino no header, no formato E-04 / D-17.
+
+    E = fileira esquerda, D = fileira direita; o numero e a ordem contada
+    DE CIMA PARA BAIXO com o conector USB voltado para cima. A direcao
+    precisa estar dita: sem ela o ordinal nao identifica pino nenhum, e a
+    coluna existe justamente para se verificar que os fios sobem na mesma
+    ordem em que saem do conector (sem cruzar).
+    """
     if gpio in ESQ:
-        return f'esq {ESQ.index(gpio) + 1}'
+        return f'E-{ESQ.index(gpio) + 1:02d}'
     if gpio in DIR:
-        return f'dir {DIR.index(gpio) + 1}'
+        return f'D-{DIR.index(gpio) + 1:02d}'
     return '-'
 
 
@@ -63,7 +71,9 @@ OUTROS = ([(f'Canal {i}', g, 'sensor, entrada com interrupcao')
 # Sentido da coluna, DERIVADO da tabela — nao escrito a mao. O texto sobre a
 # orientacao do display ja ficou desatualizado uma vez por estar fixo.
 _gpios_modulo = [int(d[4:]) for _, _, d, _ in MODULO if d.startswith('GPIO')]
-_vias_modulo = [int(via(str(g)).split()[1]) for g in _gpios_modulo]
+# Le o ordinal do formato E-nn / D-nn (antes era 'esq nn'; mudar o
+# formato sem ajustar aqui quebrou o gerador uma vez).
+_vias_modulo = [int(via(str(g)).split('-')[1]) for g in _gpios_modulo]
 _crescente = _vias_modulo == sorted(_vias_modulo)
 _coluna = ', '.join(str(g) for g in _gpios_modulo)
 if _crescente:
@@ -88,7 +98,23 @@ L.append('> mude o pino na fonte e rode o script de novo.')
 L.append('')
 L.append('Placa: **ESP32-S3-WROOM-1 N16R8** (DevKitC-1) · Display: **TJCTM24028-SPI**')
 L.append('')
-L.append('A coluna *via* e a posicao fisica no header (esq/dir, de cima para baixo).')
+L.append('### Como ler a coluna *posicao*')
+L.append('')
+L.append('`E-04` = fileira **esquerda**, 4o pino; `D-17` = fileira **direita**, 17o pino.')
+L.append('')
+L.append('O numero e a ordem FISICA no header, contada **de cima para baixo com o')
+L.append('conector USB voltado para cima** — cada fileira do ESP32-S3-DevKitC-1 tem 22')
+L.append('pinos. Nao e o numero do GPIO nem o numero do pino do modulo: e so a posicao')
+L.append('na barra de pinos.')
+L.append('')
+L.append('Ela existe para uma coisa so: conferir que os fios nao se cruzam. Se a coluna')
+L.append('subir na mesma ordem em que os pinos saem do conector, o chicote fica')
+L.append('paralelo. Se ela pular para tras em alguma linha, aqueles dois fios se cruzam.')
+L.append('')
+L.append('Ordem das fileiras (a de referencia para os ordinais):')
+L.append('')
+L.append('- **E** (esquerda): ' + ', '.join(ESQ))
+L.append('- **D** (direita): ' + ', '.join(DIR))
 L.append('')
 L.append('> ' + _ORIENTACAO)
 L.append('A ordem das vias segue a ordem dos pinos do conector, para os fios nao se')
@@ -96,8 +122,8 @@ L.append('cruzarem na PCB.')
 L.append('')
 L.append('## Modulo da tela (18 pinos) — coluna esquerda do header')
 L.append('')
-L.append('| pino | sinal | liga em | via | observacao |')
-L.append('|-----:|-------|---------|-----|------------|')
+L.append('| pino | sinal | liga em | posicao | observacao |')
+L.append('|-----:|-------|---------|---------|------------|')
 for p, s, d, o in MODULO:
     g = d.replace('GPIO', '') if d.startswith('GPIO') else ''
     L.append(f'| {p} | `{s}` | {d} | {via(g) if g else "-"} | {o} |')
@@ -117,8 +143,8 @@ L.append('Sem elas a tela funciona, mas o toque nao responde e o cartao nao mont
 L.append('')
 L.append('## Sensores e indicadores — coluna direita do header')
 L.append('')
-L.append('| sinal | liga em | via | observacao |')
-L.append('|-------|---------|-----|------------|')
+L.append('| sinal | liga em | posicao | observacao |')
+L.append('|-------|---------|---------|------------|')
 for s, g, o in OUTROS:
     L.append(f'| {s} | GPIO{g} | {via(g)} | {o} |')
 L.append('')
@@ -175,15 +201,19 @@ H.append('// O criterio nao e o numero do GPIO, e a POSICAO FISICA da via no hea
 H.append('// do DevKitC-1. Dois fios so se cruzam quando a ordem em que saem do')
 H.append('// conector difere da ordem em que chegam ao header — entao cada grupo sobe')
 H.append('// pelo header na sequencia do seu proprio conector. Por isso os GPIO')
-H.append('// parecem fora de ordem: e a ordem das VIAS que importa aqui.')
+H.append('// parecem fora de ordem: e a ordem das POSICOES que importa aqui.')
+H.append('//')
+H.append('// Posicao: E-04 = fileira esquerda, 4o pino; D-17 = fileira direita, 17o.')
+H.append('// Contagem DE CIMA PARA BAIXO com o conector USB voltado para cima; cada')
+H.append('// fileira tem 22 pinos. Nao e o numero do GPIO nem o do pino do modulo.')
 H.append('//')
 for _l in __import__('textwrap').wrap(_ORIENTACAO, 68):
     H.append('// ' + _l)
 H.append('//')
 H.append('// Modulo da tela (TJCTM24028-SPI) — coluna esquerda:')
 H.append('//')
-H.append('//   pino  sinal        GPIO   via')
-H.append('//   ----  -----------  -----  ---------')
+H.append('//   pino  sinal        GPIO   posicao no header')
+H.append('//   ----  -----------  -----  -----------------')
 for pino, sinal, destino, _obs in MODULO:
     if destino.startswith('GPIO'):
         g = destino[4:]

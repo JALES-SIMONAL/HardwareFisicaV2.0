@@ -669,7 +669,7 @@ bool lerToqueBruto(int16_t& x, int16_t& y) {
 //   z sempre no maximo    -> linha presa; MISO em curto ou sem pull.
 //   z varia ao tocar      -> o controlador esta bom, o problema e a
 //                            calibracao ou o mapeamento das coordenadas.
-void diagnosticarToque() {
+bool diagnosticarToque() {
   constexpr uint32_t DURACAO_MS = 4000;
   Serial.println("[TOUCH][DIAG] Leitura crua por 4s — TOQUE NA TELA AGORA");
   Serial.println("[TOUCH][DIAG]   z=0 sempre -> controlador mudo (pontes/T_CS)");
@@ -688,10 +688,12 @@ void diagnosticarToque() {
     delay(200);
   }
 
+  const bool respondeu = (zMax != zMin);
   Serial.printf("[TOUCH][DIAG] z variou de %u a %u -> %s\n", zMin, zMax,
-                (zMax == zMin) ? "SEM VARIACAO: controlador nao respondeu"
-                               : "variou: controlador respondendo");
+                respondeu ? "variou: controlador respondendo"
+                               : "SEM VARIACAO: controlador nao respondeu");
   Serial.flush();
+  return respondeu;
 }
 
 }  // namespace
@@ -782,7 +784,7 @@ void init() {
   tft.fillScreen(COR_FUNDO);
 
   Serial.println("[IHM] 4/7 lendo calibracao do toque na NVS"); Serial.flush();
-  diagnosticarToque();
+  const bool toqueResponde = diagnosticarToque();
 
   // ---- Calibração do touch ----
   prefsToque.begin("ihm", true);
@@ -800,9 +802,25 @@ void init() {
     toqueOk = true;
     Serial.printf("[TOUCH] Calibracao carregada da NVS: {%u, %u, %u, %u, %u}\n", calData[0],
                   calData[1], calData[2], calData[3], calData[4]);
+  } else if (!toqueResponde) {
+    // Sem resposta do controlador, calibrar seria pior que nao calibrar:
+    // tft.calibrateTouch() espera um toque que nunca chega (trava o boot) ou
+    // conclui com lixo e GRAVA essa calibracao invalida na NVS, que passa a
+    // ser carregada nos boots seguintes escondendo o defeito.
+    Serial.println("[TOUCH] Controlador mudo — calibracao NAO executada.");
+    Serial.println("[TOUCH] Verifique o T_CS e as pontes dos pinos 10, 12 e 13");
+    Serial.println("[TOUCH] (unir aos pinos 7, 6 e 9).");
   } else {
     Serial.println("[TOUCH] Sem calibracao valida para esta geometria - calibrando agora");
     calibrarToque();
+  }
+
+  if (!toqueResponde) {
+    // Vale inclusive quando ha calibracao salva na NVS: manter toqueOk em
+    // true faria a IHM se comportar como se o toque estivesse vivo.
+    // O controle pelo aplicativo Bluetooth continua inteiro.
+    toqueOk = false;
+    Serial.println("[TOUCH] Toque desabilitado nesta sessao (hardware mudo).");
   }
 
   Serial.println("[IHM] 5/7 PWM do backlight"); Serial.flush();

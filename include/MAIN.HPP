@@ -34,8 +34,8 @@
 // pelo header na sequencia do seu proprio conector. Por isso os GPIO
 // parecem fora de ordem: e a ordem das VIAS que importa aqui.
 //
-// As vias sobem junto com os pinos do conector (coluna de GPIO: 5, 6,
-// 7, 15, 16, 17, 18, 8, 9), o que corresponde ao modulo montado na
+// As vias sobem junto com os pinos do conector (coluna de GPIO: 4, 5,
+// 6, 7, 15, 16, 17, 18, 9), o que corresponde ao modulo montado na
 // orientacao normal. Se o display for virado de cabeca para baixo,
 // esta ordem passa a cruzar os fios em leque e a coluna precisa ser
 // invertida.
@@ -46,15 +46,15 @@
 //   ----  -----------  -----  ---------
 //      1  VCC             --  ver alimentacao
 //      2  GND             --  GND
-//      3  CS               5  esq 5
-//      4  RESET            6  esq 6
-//      5  D/C              7  esq 7
-//      6  MOSI            15  esq 8
-//      7  SCK             16  esq 9
-//      8  LED             17  esq 10
-//      9  SDO(MISO)       18  esq 11
+//      3  CS               4  esq 4
+//      4  RESET            5  esq 5
+//      5  D/C              6  esq 6
+//      6  MOSI             7  esq 7
+//      7  SCK             15  esq 8
+//      8  LED             16  esq 9
+//      9  SDO(MISO)       17  esq 10
 //     10  T_CLK           --  ponte -> pino 7
-//     11  T_CS             8  esq 12
+//     11  T_CS            18  esq 11
 //     12  T_DIN           --  ponte -> pino 6
 //     13  T_DO            --  ponte -> pino 9
 //     14  T_IRQ           --  NAO LIGAR
@@ -113,36 +113,36 @@ constexpr uint16_t NUM_LEDS = 6;
 // valor daqui e ignorado. NAO altere aqui achando que muda a pinagem da
 // tela; altere no platformio.ini.
 #ifndef TFT_MISO
-#define TFT_MISO 18
+#define TFT_MISO 17
 #endif
 
 #ifndef TFT_MOSI
-#define TFT_MOSI 15
+#define TFT_MOSI 7
 #endif
 
 #ifndef TFT_SCLK
-#define TFT_SCLK 16
+#define TFT_SCLK 15
 #endif
 
 #ifndef TFT_CS
-#define TFT_CS 5
+#define TFT_CS 4
 #endif
 
 #ifndef TFT_DC
-#define TFT_DC 7
+#define TFT_DC 6
 #endif
 
 #ifndef TFT_RST
-#define TFT_RST 6
+#define TFT_RST 5
 #endif
 
 #ifndef TFT_BL
-#define TFT_BL 17
+#define TFT_BL 16
 #endif
 
 // Chip select do controlador de touch XPT2046 (mesmo barramento SPI).
 #ifndef TOUCH_CS
-#define TOUCH_CS 8
+#define TOUCH_CS 18
 #endif
 
 // ---------------------------------------------------------------------

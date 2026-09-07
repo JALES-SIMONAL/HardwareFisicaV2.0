@@ -38,8 +38,8 @@
 // Contagem DE CIMA PARA BAIXO com o conector USB voltado para cima; cada
 // fileira tem 22 pinos. Nao e o numero do GPIO nem o do pino do modulo.
 //
-// As vias sobem junto com os pinos do conector (coluna de GPIO: 4, 5,
-// 6, 7, 15, 16, 17, 18, 9), o que corresponde ao modulo montado na
+// As vias sobem junto com os pinos do conector (coluna de GPIO: 5, 6,
+// 7, 15, 16, 17, 18, 8, 9), o que corresponde ao modulo montado na
 // orientacao normal. Se o display for virado de cabeca para baixo,
 // esta ordem passa a cruzar os fios em leque e a coluna precisa ser
 // invertida.
@@ -50,22 +50,22 @@
 //   ----  -----------  -----  -----------------
 //      1  VCC             --  5V
 //      2  GND             --  GND
-//      3  CS               4  E-04
-//      4  RESET            5  E-05
-//      5  D/C              6  E-06
-//      6  MOSI             7  E-07
-//      7  SCK             15  E-08
-//      8  LED             16  E-09
-//      9  SDO(MISO)       17  E-10
-//     10  T_CLK           15  E-08  ponte com o pino 7
-//     11  T_CS            18  E-11
-//     12  T_DIN            7  E-07  ponte com o pino 6
-//     13  T_DO            17  E-10  ponte com o pino 9
+//      3  CS               5  E-05
+//      4  RESET            6  E-06
+//      5  D/C              7  E-07
+//      6  MOSI            15  E-08
+//      7  SCK             16  E-09
+//      8  LED             17  E-10
+//      9  SDO(MISO)       18  E-11
+//     10  T_CLK           16  E-09  ponte com o pino 7
+//     11  T_CS             8  E-12
+//     12  T_DIN           15  E-08  ponte com o pino 6
+//     13  T_DO            18  E-11  ponte com o pino 9
 //     14  T_IRQ           --  NAO LIGAR
 //     15  SD_CS            9  E-15
-//     16  SD_MOSI          7  E-07  ponte com o pino 6
-//     17  SD_MISO         17  E-10  ponte com o pino 9
-//     18  SD_SCK          15  E-08  ponte com o pino 7
+//     16  SD_MOSI         15  E-08  ponte com o pino 6
+//     17  SD_MISO         18  E-11  ponte com o pino 9
+//     18  SD_SCK          16  E-09  ponte com o pino 7
 //
 // Sensores e indicadores — coluna direita:
 //
@@ -127,36 +127,36 @@ constexpr uint16_t NUM_LEDS = 6;
 // valor daqui e ignorado. NAO altere aqui achando que muda a pinagem da
 // tela; altere no platformio.ini.
 #ifndef TFT_MISO
-#define TFT_MISO 17
+#define TFT_MISO 18
 #endif
 
 #ifndef TFT_MOSI
-#define TFT_MOSI 7
+#define TFT_MOSI 15
 #endif
 
 #ifndef TFT_SCLK
-#define TFT_SCLK 15
+#define TFT_SCLK 16
 #endif
 
 #ifndef TFT_CS
-#define TFT_CS 4
+#define TFT_CS 5
 #endif
 
 #ifndef TFT_DC
-#define TFT_DC 6
+#define TFT_DC 7
 #endif
 
 #ifndef TFT_RST
-#define TFT_RST 5
+#define TFT_RST 6
 #endif
 
 #ifndef TFT_BL
-#define TFT_BL 16
+#define TFT_BL 17
 #endif
 
 // Chip select do controlador de touch XPT2046 (mesmo barramento SPI).
 #ifndef TOUCH_CS
-#define TOUCH_CS 18
+#define TOUCH_CS 8
 #endif
 
 // ---------------------------------------------------------------------

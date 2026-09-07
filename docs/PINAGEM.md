@@ -24,7 +24,7 @@ Ordem das fileiras (a de referencia para os ordinais):
 - **E** (esquerda): 3V3, 3V3, RST, 4, 5, 6, 7, 15, 16, 17, 18, 8, 3, 46, 9, 10, 11, 12, 13, 14, 5V, GND
 - **D** (direita): GND, 43, 44, 1, 2, 42, 41, 40, 39, 38, 37, 36, 35, 0, 45, 48, 47, 21, 20, 19, GND, GND
 
-> As vias sobem junto com os pinos do conector (coluna de GPIO: 4, 5, 6, 7, 15, 16, 17, 18, 9), o que corresponde ao modulo montado na orientacao normal. Se o display for virado de cabeca para baixo, esta ordem passa a cruzar os fios em leque e a coluna precisa ser invertida.
+> As vias sobem junto com os pinos do conector (coluna de GPIO: 5, 6, 7, 15, 16, 17, 18, 8, 9), o que corresponde ao modulo montado na orientacao normal. Se o display for virado de cabeca para baixo, esta ordem passa a cruzar os fios em leque e a coluna precisa ser invertida.
 A ordem das vias segue a ordem dos pinos do conector, para os fios nao se
 cruzarem na PCB.
 
@@ -34,22 +34,22 @@ cruzarem na PCB.
 |-----:|-------|---------|---------|------------|
 | 1 | `VCC` | 5V | - | com J1 aberto (padrao). Com J1 fechado, ligar em 3V3 |
 | 2 | `GND` | GND | - | comum a tudo |
-| 3 | `CS` | GPIO4 | E-04 | chip select da TELA |
-| 4 | `RESET` | GPIO5 | E-05 |  |
-| 5 | `D/C` | GPIO6 | E-06 | dado / comando |
-| 6 | `MOSI` | GPIO7 | E-07 | dado do ESP32 para o modulo |
-| 7 | `SCK` | GPIO15 | E-08 | clock do barramento |
-| 8 | `LED` | GPIO16 | E-09 | backlight, PWM no canal LEDC 2 |
-| 9 | `SDO(MISO)` | GPIO17 | E-10 | dado do modulo para o ESP32 |
-| 10 | `T_CLK` | GPIO15 *(via ponte)* | E-08 | unir ao pino 7 (`SCK`) — clock do touch |
-| 11 | `T_CS` | GPIO18 | E-11 | chip select do TOUCH |
-| 12 | `T_DIN` | GPIO7 *(via ponte)* | E-07 | unir ao pino 6 (`MOSI`) — MOSI do touch |
-| 13 | `T_DO` | GPIO17 *(via ponte)* | E-10 | unir ao pino 9 (`SDO(MISO)`) — MISO do touch |
+| 3 | `CS` | GPIO5 | E-05 | chip select da TELA |
+| 4 | `RESET` | GPIO6 | E-06 |  |
+| 5 | `D/C` | GPIO7 | E-07 | dado / comando |
+| 6 | `MOSI` | GPIO15 | E-08 | dado do ESP32 para o modulo |
+| 7 | `SCK` | GPIO16 | E-09 | clock do barramento |
+| 8 | `LED` | GPIO17 | E-10 | backlight, PWM no canal LEDC 2 |
+| 9 | `SDO(MISO)` | GPIO18 | E-11 | dado do modulo para o ESP32 |
+| 10 | `T_CLK` | GPIO16 *(via ponte)* | E-09 | unir ao pino 7 (`SCK`) — clock do touch |
+| 11 | `T_CS` | GPIO8 | E-12 | chip select do TOUCH |
+| 12 | `T_DIN` | GPIO15 *(via ponte)* | E-08 | unir ao pino 6 (`MOSI`) — MOSI do touch |
+| 13 | `T_DO` | GPIO18 *(via ponte)* | E-11 | unir ao pino 9 (`SDO(MISO)`) — MISO do touch |
 | 14 | `T_IRQ` | NAO LIGAR | - | o firmware le o toque por consulta |
 | 15 | `SD_CS` | GPIO9 | E-15 | chip select do CARTAO |
-| 16 | `SD_MOSI` | GPIO7 *(via ponte)* | E-07 | unir ao pino 6 (`MOSI`) |
-| 17 | `SD_MISO` | GPIO17 *(via ponte)* | E-10 | unir ao pino 9 (`SDO(MISO)`) |
-| 18 | `SD_SCK` | GPIO15 *(via ponte)* | E-08 | unir ao pino 7 (`SCK`) |
+| 16 | `SD_MOSI` | GPIO15 *(via ponte)* | E-08 | unir ao pino 6 (`MOSI`) |
+| 17 | `SD_MISO` | GPIO18 *(via ponte)* | E-11 | unir ao pino 9 (`SDO(MISO)`) |
+| 18 | `SD_SCK` | GPIO16 *(via ponte)* | E-09 | unir ao pino 7 (`SCK`) |
 
 ### As seis pontes
 
@@ -58,9 +58,9 @@ Touch e cartao compartilham o barramento da tela e se distinguem so pelo CS.
 
 | unir estes pinos | ao pino | sinal | GPIO resultante |
 |------------------|---------|-------|-----------------|
-| 10 (T_CLK), 18 (SD_SCK) | 7 | SCK | GPIO15 (E-08) |
-| 12 (T_DIN), 16 (SD_MOSI) | 6 | MOSI | GPIO7 (E-07) |
-| 13 (T_DO), 17 (SD_MISO) | 9 | SDO(MISO) | GPIO17 (E-10) |
+| 10 (T_CLK), 18 (SD_SCK) | 7 | SCK | GPIO16 (E-09) |
+| 12 (T_DIN), 16 (SD_MOSI) | 6 | MOSI | GPIO15 (E-08) |
+| 13 (T_DO), 17 (SD_MISO) | 9 | SDO(MISO) | GPIO18 (E-11) |
 
 Sem elas a tela funciona, mas o toque nao responde e o cartao nao monta.
 
@@ -99,8 +99,8 @@ custo e brilho maximo um pouco menor.
 
 | dispositivo | CS |
 |-------------|----|
-| Tela | GPIO4 |
-| Touch | GPIO18 |
+| Tela | GPIO5 |
+| Touch | GPIO8 |
 | Cartao SD | GPIO9 |
 
 ## GPIO que NAO podem ser usados nesta placa

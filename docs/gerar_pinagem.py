@@ -71,7 +71,7 @@ MODULO = [
     (11, 'T_CS', f'GPIO{fl["TOUCH_CS"]}', 'chip select do TOUCH'),
     (12, 'T_DIN', 'ponte -> pino 6', 'MOSI do touch'),
     (13, 'T_DO', 'ponte -> pino 9', 'MISO do touch'),
-    (14, 'T_IRQ', 'NAO LIGAR', 'o firmware le o toque por consulta'),
+    (14, 'T_IRQ', 'deixar SOLTO', 'saida do XPT2046 — nunca amarrar a 3V3 ou GND'),
     (15, 'SD_CS', f'GPIO{ct["SD_CS_PIN"]}', 'chip select do CARTAO'),
     (16, 'SD_MOSI', 'ponte -> pino 6', ''),
     (17, 'SD_MISO', 'ponte -> pino 9', ''),
@@ -169,6 +169,23 @@ for p, s, d, o in MODULO:
         L.append(f'| {p} | `{s}` | GPIO{gp} *(via ponte)* | {via(gp)} | {obs} |')
     else:
         L.append(f'| {p} | `{s}` | {d} | - | {o} |')
+L.append('')
+L.append('### Por que o T_IRQ (pino 14) fica solto')
+L.append('')
+L.append('O T_IRQ e uma **saida** do XPT2046, nao uma entrada: e open-drain, ja tem')
+L.append('pull-up no modulo, e vai a nivel BAIXO quando a tela e tocada.')
+L.append('')
+L.append('Amarra-lo em 3V3 curto-circuitaria a saida do controlador no momento do')
+L.append('toque — o transistor interno puxa para GND enquanto o trilho segura em cima.')
+L.append('Em GND seria pior ainda: o pino ficaria preso em "tocado" permanente, alem do')
+L.append('mesmo conflito eletrico.')
+L.append('')
+L.append('A regra que se aplica aqui: pino de ENTRADA nao usado se amarra a um trilho')
+L.append('para nao flutuar; pino de SAIDA nao usado se deixa DESCONECTADO. Uma saida')
+L.append('nunca flutua — ela e quem manda no nivel.')
+L.append('')
+L.append('Ele so precisaria de fio se o firmware fosse ler o toque por interrupcao, e')
+L.append('nao le: a leitura e por consulta ao controlador, a cada volta do laco.')
 L.append('')
 L.append('### As seis pontes')
 L.append('')
@@ -293,6 +310,11 @@ H.append('// Sensores e indicadores — coluna direita:')
 H.append('//')
 for sinal, g, _o in OUTROS:
     H.append(f'//   {sinal:<14s} GPIO{g:<4s} {via(g)}')
+H.append('//')
+H.append('// T_IRQ (pino 14) fica SOLTO. E uma SAIDA do XPT2046 (open-drain,')
+H.append('// com pull-up no modulo, vai a nivel baixo ao tocar) — amarra-la a')
+H.append('// 3V3 ou GND curto-circuita a saida do controlador. Pino de saida')
+H.append('// nao usado fica desconectado; quem se amarra a trilho e entrada.')
 H.append('//')
 H.append('// Alimentacao (trilhos do header, nao saem de GPIO):')
 H.append('//   3V3  ' + posicoes('3V3') + '   sensores dos canais, NeoPixel')

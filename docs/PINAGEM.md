@@ -45,11 +45,28 @@ cruzarem na PCB.
 | 11 | `T_CS` | GPIO8 | E-12 | chip select do TOUCH |
 | 12 | `T_DIN` | GPIO15 *(via ponte)* | E-08 | unir ao pino 6 (`MOSI`) — MOSI do touch |
 | 13 | `T_DO` | GPIO18 *(via ponte)* | E-11 | unir ao pino 9 (`SDO(MISO)`) — MISO do touch |
-| 14 | `T_IRQ` | NAO LIGAR | - | o firmware le o toque por consulta |
+| 14 | `T_IRQ` | deixar SOLTO | - | saida do XPT2046 — nunca amarrar a 3V3 ou GND |
 | 15 | `SD_CS` | GPIO9 | E-15 | chip select do CARTAO |
 | 16 | `SD_MOSI` | GPIO15 *(via ponte)* | E-08 | unir ao pino 6 (`MOSI`) |
 | 17 | `SD_MISO` | GPIO18 *(via ponte)* | E-11 | unir ao pino 9 (`SDO(MISO)`) |
 | 18 | `SD_SCK` | GPIO16 *(via ponte)* | E-09 | unir ao pino 7 (`SCK`) |
+
+### Por que o T_IRQ (pino 14) fica solto
+
+O T_IRQ e uma **saida** do XPT2046, nao uma entrada: e open-drain, ja tem
+pull-up no modulo, e vai a nivel BAIXO quando a tela e tocada.
+
+Amarra-lo em 3V3 curto-circuitaria a saida do controlador no momento do
+toque — o transistor interno puxa para GND enquanto o trilho segura em cima.
+Em GND seria pior ainda: o pino ficaria preso em "tocado" permanente, alem do
+mesmo conflito eletrico.
+
+A regra que se aplica aqui: pino de ENTRADA nao usado se amarra a um trilho
+para nao flutuar; pino de SAIDA nao usado se deixa DESCONECTADO. Uma saida
+nunca flutua — ela e quem manda no nivel.
+
+Ele so precisaria de fio se o firmware fosse ler o toque por interrupcao, e
+nao le: a leitura e por consulta ao controlador, a cada volta do laco.
 
 ### As seis pontes
 

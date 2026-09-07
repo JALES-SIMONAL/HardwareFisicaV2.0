@@ -61,7 +61,7 @@
 //     11  T_CS             8  E-12
 //     12  T_DIN           15  E-08  ponte com o pino 6
 //     13  T_DO            18  E-11  ponte com o pino 9
-//     14  T_IRQ           --  NAO LIGAR
+//     14  T_IRQ           --  deixar SOLTO
 //     15  SD_CS            9  E-15
 //     16  SD_MOSI         15  E-08  ponte com o pino 6
 //     17  SD_MISO         18  E-11  ponte com o pino 9
@@ -77,6 +77,11 @@
 //   Canal 6        GPIO39   D-09
 //   NeoPixel DIN   GPIO38   D-10
 //   Buzzer +       GPIO47   D-17
+//
+// T_IRQ (pino 14) fica SOLTO. E uma SAIDA do XPT2046 (open-drain,
+// com pull-up no modulo, vai a nivel baixo ao tocar) — amarra-la a
+// 3V3 ou GND curto-circuita a saida do controlador. Pino de saida
+// nao usado fica desconectado; quem se amarra a trilho e entrada.
 //
 // Alimentacao (trilhos do header, nao saem de GPIO):
 //   3V3  E-01, E-02   sensores dos canais, NeoPixel

@@ -7,6 +7,13 @@
 Placa: **ESP32-S3-WROOM-1 N16R8** (DevKitC-1) · Display: **TJCTM24028-SPI**
 
 A coluna *via* e a posicao fisica no header (esq/dir, de cima para baixo).
+
+> **O display e montado DE CABECA PARA BAIXO.** Por isso a coluna de GPIO
+> DESCE (9, 8, 18, 17, 16, 15, 7, 6, 5) em vez de subir: virado, o conector
+> apresenta os pinos na ordem inversa, e e essa ordem invertida que precisa
+> acompanhar as vias do header para os fios ficarem paralelos. Reordenar a
+> coluna em ordem crescente, achando que esta arrumando, faria os nove fios
+> se cruzarem em leque.
 A ordem das vias segue a ordem dos pinos do conector, para os fios nao se
 cruzarem na PCB.
 
@@ -16,19 +23,19 @@ cruzarem na PCB.
 |-----:|-------|---------|-----|------------|
 | 1 | `VCC` | ver alimentacao | - | com J1 aberto = 5V; com J1 fechado = 3V3 |
 | 2 | `GND` | GND | - | comum a tudo |
-| 3 | `CS` | GPIO5 | esq 5 | chip select da TELA |
-| 4 | `RESET` | GPIO6 | esq 6 |  |
-| 5 | `D/C` | GPIO7 | esq 7 | dado / comando |
-| 6 | `MOSI` | GPIO15 | esq 8 | dado do ESP32 para o modulo |
+| 3 | `CS` | GPIO9 | esq 17 | chip select da TELA |
+| 4 | `RESET` | GPIO8 | esq 12 |  |
+| 5 | `D/C` | GPIO18 | esq 11 | dado / comando |
+| 6 | `MOSI` | GPIO17 | esq 10 | dado do ESP32 para o modulo |
 | 7 | `SCK` | GPIO16 | esq 9 | clock do barramento |
-| 8 | `LED` | GPIO17 | esq 10 | backlight, PWM no canal LEDC 2 |
-| 9 | `SDO(MISO)` | GPIO18 | esq 11 | dado do modulo para o ESP32 |
+| 8 | `LED` | GPIO15 | esq 8 | backlight, PWM no canal LEDC 2 |
+| 9 | `SDO(MISO)` | GPIO7 | esq 7 | dado do modulo para o ESP32 |
 | 10 | `T_CLK` | ponte -> pino 7 | - | clock do touch |
-| 11 | `T_CS` | GPIO8 | esq 12 | chip select do TOUCH |
+| 11 | `T_CS` | GPIO6 | esq 6 | chip select do TOUCH |
 | 12 | `T_DIN` | ponte -> pino 6 | - | MOSI do touch |
 | 13 | `T_DO` | ponte -> pino 9 | - | MISO do touch |
 | 14 | `T_IRQ` | NAO LIGAR | - | o firmware le o toque por consulta |
-| 15 | `SD_CS` | GPIO9 | esq 17 | chip select do CARTAO |
+| 15 | `SD_CS` | GPIO5 | esq 5 | chip select do CARTAO |
 | 16 | `SD_MOSI` | ponte -> pino 6 | - |  |
 | 17 | `SD_MISO` | ponte -> pino 9 | - |  |
 | 18 | `SD_SCK` | ponte -> pino 7 | - |  |
@@ -63,9 +70,9 @@ Sem elas a tela funciona, mas o toque nao responde e o cartao nao monta.
 
 | dispositivo | CS |
 |-------------|----|
-| Tela | GPIO5 |
-| Touch | GPIO8 |
-| Cartao SD | GPIO9 |
+| Tela | GPIO9 |
+| Touch | GPIO6 |
+| Cartao SD | GPIO5 |
 
 ## GPIO que NAO podem ser usados nesta placa
 

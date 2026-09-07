@@ -34,25 +34,30 @@
 // pelo header na sequencia do seu proprio conector. Por isso os GPIO
 // parecem fora de ordem: e a ordem das VIAS que importa aqui.
 //
+// O DISPLAY E MONTADO DE CABECA PARA BAIXO — por isso a coluna de GPIO
+// desce (9, 8, 18, 17, 16, 15, 7, 6, 5). Virado, o conector apresenta os
+// pinos na ordem inversa; poe-los em ordem crescente cruzaria os nove
+// fios em leque.
+//
 // Modulo da tela (TJCTM24028-SPI) — coluna esquerda:
 //
 //   pino  sinal        GPIO   via
 //   ----  -----------  -----  ---------
 //      1  VCC             --  ver alimentacao
 //      2  GND             --  GND
-//      3  CS               5  esq 5
-//      4  RESET            6  esq 6
-//      5  D/C              7  esq 7
-//      6  MOSI            15  esq 8
+//      3  CS               9  esq 17
+//      4  RESET            8  esq 12
+//      5  D/C             18  esq 11
+//      6  MOSI            17  esq 10
 //      7  SCK             16  esq 9
-//      8  LED             17  esq 10
-//      9  SDO(MISO)       18  esq 11
+//      8  LED             15  esq 8
+//      9  SDO(MISO)        7  esq 7
 //     10  T_CLK           --  ponte -> pino 7
-//     11  T_CS             8  esq 12
+//     11  T_CS             6  esq 6
 //     12  T_DIN           --  ponte -> pino 6
 //     13  T_DO            --  ponte -> pino 9
 //     14  T_IRQ           --  NAO LIGAR
-//     15  SD_CS            9  esq 17
+//     15  SD_CS            5  esq 5
 //     16  SD_MOSI         --  ponte -> pino 6
 //     17  SD_MISO         --  ponte -> pino 9
 //     18  SD_SCK          --  ponte -> pino 7
@@ -107,11 +112,11 @@ constexpr uint16_t NUM_LEDS = 6;
 // valor daqui e ignorado. NAO altere aqui achando que muda a pinagem da
 // tela; altere no platformio.ini.
 #ifndef TFT_MISO
-#define TFT_MISO 18
+#define TFT_MISO 7
 #endif
 
 #ifndef TFT_MOSI
-#define TFT_MOSI 15
+#define TFT_MOSI 17
 #endif
 
 #ifndef TFT_SCLK
@@ -119,24 +124,24 @@ constexpr uint16_t NUM_LEDS = 6;
 #endif
 
 #ifndef TFT_CS
-#define TFT_CS 5
+#define TFT_CS 9
 #endif
 
 #ifndef TFT_DC
-#define TFT_DC 7
+#define TFT_DC 18
 #endif
 
 #ifndef TFT_RST
-#define TFT_RST 6
+#define TFT_RST 8
 #endif
 
 #ifndef TFT_BL
-#define TFT_BL 17
+#define TFT_BL 15
 #endif
 
 // Chip select do controlador de touch XPT2046 (mesmo barramento SPI).
 #ifndef TOUCH_CS
-#define TOUCH_CS 8
+#define TOUCH_CS 6
 #endif
 
 // ---------------------------------------------------------------------
@@ -165,7 +170,7 @@ constexpr bool CHANNEL_PULLUP = false;
 // ---------------------------------------------------------------------
 // Cartao microSD (compartilha o barramento SPI do TFT: MOSI/MISO/SCK)
 // ---------------------------------------------------------------------
-constexpr uint8_t SD_CS_PIN = 9;
+constexpr uint8_t SD_CS_PIN = 5;
 
 // ---------------------------------------------------------------------
 // Buzzer

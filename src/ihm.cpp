@@ -784,6 +784,87 @@ bool diagnosticarToque() {
 // arrasto redesenham o grafico sem passar pela maquina de estados.
 void desenharGraficoInterno();
 
+// Teste eletrico da linha de MISO, feito ANTES de qualquer trafego SPI.
+//
+// POR QUE ELE EXISTE: display, touch e cartao dividem SCLK/MOSI/MISO e se
+// distinguem so pelo CS. O display e o unico dos tres que nunca precisa
+// LER — ele so recebe. O touch e o cartao dependem do MISO para devolver
+// qualquer coisa. Quando os dois que leem falham e o que so escreve
+// funciona, o unico fio que explica os tres resultados ao mesmo tempo e o
+// MISO.
+//
+// COMO ELE DECIDE: com todos os CS em HIGH ninguem esta selecionado, e a
+// linha deveria estar em alta impedancia — ou seja, deveria seguir o pull
+// interno que ligarmos. Entao:
+//
+//   pull-up le 1 e pull-down le 0  -> a linha esta LIVRE. O barramento
+//      esta eletricamente sao em repouso, e a falha e de outra natureza.
+//   os dois leem 1                 -> alguem segura a linha em ALTO (ou ha
+//      um pull-up externo forte, de alguns kohm).
+//   os dois leem 0                 -> alguem segura a linha em BAIXO, ou
+//      ela esta em curto com o GND.
+//
+// Um "alguem" classico nestes modulos de 2.8" e o SDO do proprio display,
+// que em muitos deles NAO e tri-state: ele dirige o fio o tempo todo, e
+// nao apenas quando selecionado. Nesse caso o display funciona
+// perfeitamente (so escreve) enquanto impede touch e cartao de responder —
+// exatamente o quadro observado.
+//
+// O pull interno do ESP32 e fraco (~45k), entao um pull-up externo de 10k
+// tambem aparece como "os dois leem 1". A mensagem diz isso para o
+// veredito nao ser lido como acusacao certa.
+//
+// Roda antes de tft.init() de proposito: mexer em pinMode de um pino ja
+// roteado pela matriz do SPI e desnecessario e arriscado. Aqui os pinos
+// ainda sao GPIO comuns.
+void diagnosticarBarramentoMiso() {
+  Serial.printf("[BUS][DIAG] Teste eletrico do MISO (GPIO%d) com todos os CS em HIGH\n",
+                TFT_MISO);
+  Serial.printf("[BUS][DIAG] SCLK=%d MOSI=%d MISO=%d | CS: display=%d touch=%d cartao=%d\n",
+                TFT_SCLK, TFT_MOSI, TFT_MISO, TFT_CS, TOUCH_CS, SD_CS_PIN);
+
+  pinMode(TFT_CS, OUTPUT);
+  digitalWrite(TFT_CS, HIGH);
+  pinMode(TOUCH_CS, OUTPUT);
+  digitalWrite(TOUCH_CS, HIGH);
+  pinMode(SD_CS_PIN, OUTPUT);
+  digitalWrite(SD_CS_PIN, HIGH);
+  delay(2);
+
+  pinMode(TFT_MISO, INPUT_PULLUP);
+  delay(5);
+  const int comPullUp = digitalRead(TFT_MISO);
+  pinMode(TFT_MISO, INPUT_PULLDOWN);
+  delay(5);
+  const int comPullDown = digitalRead(TFT_MISO);
+  pinMode(TFT_MISO, INPUT);
+
+  Serial.printf("[BUS][DIAG] MISO com pull-up: %d | com pull-down: %d\n", comPullUp, comPullDown);
+
+  if (comPullUp == 1 && comPullDown == 0) {
+    Serial.println("[BUS][DIAG] VEREDITO: linha LIVRE - segue o pull interno, como deve.");
+    Serial.println("[BUS][DIAG] Ninguem segura o MISO em repouso. Se touch e cartao");
+    Serial.println("[BUS][DIAG] continuam mudos, o problema nao e disputa pelo fio:");
+    Serial.println("[BUS][DIAG] suspeite do proprio fio do MISO nao chegar aos modulos");
+    Serial.println("[BUS][DIAG] (a tela funciona sem ele, entao ela nao o testa).");
+  } else if (comPullUp == comPullDown) {
+    Serial.printf("[BUS][DIAG] VEREDITO: alguem SEGURA o MISO em %s - o pull interno\n",
+                  comPullUp == 1 ? "ALTO" : "BAIXO");
+    Serial.println("[BUS][DIAG] nao consegue move-lo, com todos os CS desselecionados.");
+    if (comPullUp == 1) {
+      Serial.println("[BUS][DIAG] Causas: SDO do display sem tri-state (comum nestes");
+      Serial.println("[BUS][DIAG] modulos) ou um pull-up externo de poucos kohm.");
+      Serial.println("[BUS][DIAG] TESTE: desligue so o SDO do display do GPIO18 e deixe");
+      Serial.println("[BUS][DIAG] T_DO e MISO do cartao ligados. A tela continua normal");
+      Serial.println("[BUS][DIAG] (o firmware nunca depende de ler o display).");
+    } else {
+      Serial.println("[BUS][DIAG] Causas: curto do GPIO18 com o GND, ou uma saida de");
+      Serial.println("[BUS][DIAG] algum modulo travada em nivel baixo.");
+    }
+  }
+  Serial.flush();
+}
+
 void init() {
   Serial.println("[DISPLAY] Inicializacao iniciada");
   Serial.printf("[DISPLAY] TFT_CS: %d | TFT_DC: %d | TFT_RST: %d | TFT_BL: %d\n", TFT_CS, TFT_DC,
@@ -821,6 +902,8 @@ void init() {
   digitalWrite(SD_CS_PIN, HIGH);
   Serial.printf("[DISPLAY] SD desselecionado (pino %d em HIGH) antes de iniciar o painel\n",
                 SD_CS_PIN);
+
+  diagnosticarBarramentoMiso();
 
   Serial.println("[IHM] 2/6 tft.init()"); Serial.flush();
   tft.init();

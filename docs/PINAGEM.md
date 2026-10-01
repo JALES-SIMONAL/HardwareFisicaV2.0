@@ -24,7 +24,7 @@ Ordem das fileiras (a de referencia para os ordinais):
 - **E** (esquerda): 3V3, 3V3, RST, 4, 5, 6, 7, 15, 16, 17, 18, 8, 3, 46, 9, 10, 11, 12, 13, 14, 5V, GND
 - **D** (direita): GND, 43, 44, 1, 2, 42, 41, 40, 39, 38, 37, 36, 35, 0, 45, 48, 47, 21, 20, 19, GND, GND
 
-> As vias sobem junto com os pinos do conector (coluna de GPIO: 5, 6, 7, 15, 16, 17, 18, 8, 9), o que corresponde ao modulo montado na orientacao normal. Se o display for virado de cabeca para baixo, esta ordem passa a cruzar os fios em leque e a coluna precisa ser invertida.
+> As vias sobem junto com os pinos do conector (coluna de GPIO: 5, 6, 7, 15, 16, 17, 18, 8, 10), o que corresponde ao modulo montado na orientacao normal. Se o display for virado de cabeca para baixo, esta ordem passa a cruzar os fios em leque e a coluna precisa ser invertida.
 A ordem das vias segue a ordem dos pinos do conector, para os fios nao se
 cruzarem na PCB.
 
@@ -46,7 +46,7 @@ cruzarem na PCB.
 | 12 | `T_DIN` | GPIO15 | E-08 | mesma rede do pino 6 (`MOSI`) — MOSI do touch |
 | 13 | `T_DO` | GPIO18 | E-11 | mesma rede do pino 9 (`SDO(MISO)`) — MISO do touch |
 | 14 | `T_IRQ` | deixar SOLTO | - | saida do XPT2046 — nunca amarrar a 3V3 ou GND |
-| 15 | `SD_CS` | GPIO9 | E-15 | chip select do CARTAO |
+| 15 | `SD_CS` | GPIO10 | E-16 | chip select do CARTAO |
 | 16 | `SD_MOSI` | GPIO15 | E-08 | mesma rede do pino 6 (`MOSI`) |
 | 17 | `SD_MISO` | GPIO18 | E-11 | mesma rede do pino 9 (`SDO(MISO)`) |
 | 18 | `SD_SCK` | GPIO16 | E-09 | mesma rede do pino 7 (`SCK`) |
@@ -126,7 +126,7 @@ custo e brilho maximo um pouco menor.
 |-------------|----|
 | Tela | GPIO5 |
 | Touch | GPIO8 |
-| Cartao SD | GPIO9 |
+| Cartao SD | GPIO10 |
 
 ## GPIO que NAO podem ser usados nesta placa
 

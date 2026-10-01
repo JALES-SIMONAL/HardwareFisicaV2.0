@@ -239,6 +239,80 @@ void init() {
 
 bool cartaoDisponivel() { return cartaoOk; }
 
+bool autoTesteCartao() {
+  if (!cartaoOk) {
+    Serial.println("[SD][TESTE] Cartao nao montado — autoteste nao executado");
+    return false;
+  }
+
+  constexpr char NOME[] = "/.autoteste.tmp";
+  constexpr size_t TAM = 512;
+
+  TravaBarramentoSD travaBus;
+
+  // Padrao dependente da POSICAO: se o cartao devolver um setor por outro,
+  // ou repetir um bloco, o conteudo nao bate. Um padrao constante passaria.
+  File f = SD.open(NOME, FILE_WRITE);
+  if (!f) {
+    Serial.println("[SD][TESTE] FALHA ao criar arquivo — cartao protegido contra escrita?");
+    return false;
+  }
+  for (size_t i = 0; i < TAM; i++) {
+    if (f.write(static_cast<uint8_t>((i * 31u) ^ (i >> 8))) != 1) {
+      Serial.printf("[SD][TESTE] FALHA ao gravar no byte %u\n", static_cast<unsigned>(i));
+      f.close();
+      SD.remove(NOME);
+      return false;
+    }
+  }
+  f.close();
+
+  f = SD.open(NOME, FILE_READ);
+  if (!f) {
+    Serial.println("[SD][TESTE] FALHA ao reabrir o arquivo para leitura");
+    SD.remove(NOME);
+    return false;
+  }
+  if (f.size() != TAM) {
+    Serial.printf("[SD][TESTE] FALHA: gravados %u bytes, arquivo tem %u\n",
+                  static_cast<unsigned>(TAM), static_cast<unsigned>(f.size()));
+    f.close();
+    SD.remove(NOME);
+    return false;
+  }
+
+  size_t erros = 0;
+  size_t primeiro = 0;
+  for (size_t i = 0; i < TAM; i++) {
+    const int lido = f.read();
+    const uint8_t esperado = static_cast<uint8_t>((i * 31u) ^ (i >> 8));
+    if (lido < 0 || static_cast<uint8_t>(lido) != esperado) {
+      if (erros == 0) primeiro = i;
+      erros++;
+    }
+  }
+  f.close();
+  SD.remove(NOME);
+
+  if (erros != 0) {
+    Serial.printf("[SD][TESTE] FALHA: %u de %u bytes diferentes, primeiro no offset %u\n",
+                  static_cast<unsigned>(erros), static_cast<unsigned>(TAM),
+                  static_cast<unsigned>(primeiro));
+    Serial.println("[SD][TESTE] O cartao monta mas nao guarda dado de forma confiavel.");
+    return false;
+  }
+
+  const uint8_t tipo = SD.cardType();
+  const char* nomeTipo = (tipo == CARD_MMC)    ? "MMC"
+                         : (tipo == CARD_SD)   ? "SDSC"
+                         : (tipo == CARD_SDHC) ? "SDHC/SDXC"
+                                               : "desconhecido";
+  Serial.printf("[SD][TESTE] OK — %s, %llu MB, %u bytes gravados e conferidos\n",
+                nomeTipo, SD.cardSize() / (1024ULL * 1024ULL),
+                static_cast<unsigned>(TAM));
+  return true;
+}
+
 bool arquivoExiste(const char* nomeComExtensao) {
   if (!cartaoOk) return false;
   TravaBarramentoSD travaBus;

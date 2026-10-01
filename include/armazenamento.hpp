@@ -14,6 +14,17 @@ void init();
 
 bool cartaoDisponivel();
 
+// Autoteste do cartao: grava um arquivo temporario com um padrao conhecido,
+// le de volta, confere byte a byte e apaga. Retorna true so se o ciclo
+// inteiro fechou.
+//
+// Montar o cartao (o que init() faz) NAO prova que ele grava e le: o
+// SD.begin() so negocia a inicializacao e le o setor de boot. Cartao
+// protegido contra escrita, meio degradado ou barramento marginal passa na
+// montagem e falha na primeira gravacao de experimento — ou seja, no pior
+// momento possivel, com dados a perder.
+bool autoTesteCartao();
+
 bool arquivoExiste(const char* nomeComExtensao);
 
 // Abre "<nomeSemExtensao>.csv" para escrita e já grava o cabeçalho CSV.

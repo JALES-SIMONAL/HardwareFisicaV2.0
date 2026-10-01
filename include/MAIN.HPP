@@ -39,7 +39,7 @@
 // fileira tem 22 pinos. Nao e o numero do GPIO nem o do pino do modulo.
 //
 // As vias sobem junto com os pinos do conector (coluna de GPIO: 5, 6,
-// 7, 15, 16, 17, 18, 8, 9), o que corresponde ao modulo montado na
+// 7, 15, 16, 17, 18, 8, 10), o que corresponde ao modulo montado na
 // orientacao normal. Se o display for virado de cabeca para baixo,
 // esta ordem passa a cruzar os fios em leque e a coluna precisa ser
 // invertida.
@@ -62,7 +62,7 @@
 //     12  T_DIN           15  E-08  mesma rede do pino 6
 //     13  T_DO            18  E-11  mesma rede do pino 9
 //     14  T_IRQ           --  deixar SOLTO
-//     15  SD_CS            9  E-15
+//     15  SD_CS           10  E-16
 //     16  SD_MOSI         15  E-08  mesma rede do pino 6
 //     17  SD_MISO         18  E-11  mesma rede do pino 9
 //     18  SD_SCK          16  E-09  mesma rede do pino 7
@@ -190,7 +190,7 @@ constexpr bool CHANNEL_PULLUP = false;
 // ---------------------------------------------------------------------
 // Cartao microSD (compartilha o barramento SPI do TFT: MOSI/MISO/SCK)
 // ---------------------------------------------------------------------
-constexpr uint8_t SD_CS_PIN = 9;
+constexpr uint8_t SD_CS_PIN = 10;
 
 // ---------------------------------------------------------------------
 // Buzzer

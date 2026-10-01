@@ -92,9 +92,17 @@ constexpr uint8_t BUZZER_PWM_CANAL = 4;
 // intensidade sem amplificador externo.
 constexpr uint16_t BUZZER_FREQUENCIA_HZ = 2000;
 
-// Rotacao do painel. 0 = paisagem 320x240 neste ILI9342 (o painel e deitado
-// por natureza — ver o bloco do driver no platformio.ini).
-constexpr uint8_t ROTACAO_DISPLAY = 0;
+// Rotacao do painel. 2 = paisagem 320x240 girada em 180 graus, para o
+// display montado de cabeca para baixo. A rotacao 0 seria a orientacao
+// natural deste ILI9342 (o painel e deitado por natureza — ver o bloco do
+// driver no platformio.ini).
+//
+// Trocar este valor tambem INVALIDA a calibracao do toque guardada na NVS,
+// e isso e proposital: assinaturaCalibracao() inclui a rotacao, porque os
+// valores de calibracao convertem o bruto do XPT2046 em coordenada de tela
+// e essa conversao muda junto com a orientacao. Sem isso o toque passaria a
+// responder espelhado, com uma calibracao que parece valida.
+constexpr uint8_t ROTACAO_DISPLAY = 2;
 
 // ---------------------------------------------------------------------
 // Toque (XPT2046)

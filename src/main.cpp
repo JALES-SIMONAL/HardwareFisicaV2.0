@@ -35,6 +35,89 @@ void tarefaAquisicaoArmazenamento(void* /*parametro*/) {
   }
 }
 
+
+// Confere a memoria externa do modulo antes de qualquer coisa alocar.
+//
+// Este firmware roda num ESP32-S3-WROOM-1 N16R8, com 8MB de PSRAM octal
+// (platformio.ini: memory_type = qio_opi). Se essa PSRAM nao subir, dois
+// efeitos aparecem longe daqui e sao dificeis de rastrear ate a causa: o
+// heap disponivel cai para so o interno, e os GPIO 33 a 37 — que a PSRAM
+// octal ocupa — passam a parecer livres, convidando a usa-los.
+//
+// psramFound() sozinho nao basta: ele diz que o controlador respondeu, nao
+// que a memoria GUARDA dado. Uma linha de endereco trocada ou um bit preso
+// passam nessa checagem e so se manifestam como corrupcao silenciosa depois.
+// Por isso o teste escreve e confere um padrao que DEPENDE DO INDICE: se
+// duas linhas de endereco estiverem trocadas, a leitura devolve o byte de
+// outra posicao e o padrao denuncia; um padrao constante nao pegaria isso.
+void verificarMemoria() {
+  Serial.println("[MEM] Verificando memoria");
+  Serial.printf("[MEM] Flash: %u MB\n",
+                static_cast<unsigned>(ESP.getFlashChipSize() / (1024UL * 1024UL)));
+  Serial.printf("[MEM] Heap interno: %u livres de %u bytes\n",
+                static_cast<unsigned>(ESP.getFreeHeap()),
+                static_cast<unsigned>(ESP.getHeapSize()));
+  Serial.flush();
+
+  if (!psramFound()) {
+    Serial.println("[MEM][ERRO] PSRAM NAO DETECTADA.");
+    Serial.println("[MEM][ERRO] Esperados 8MB octal (modulo N16R8).");
+    Serial.println("[MEM][ERRO] Confira se o modulo e N16R8 e se o platformio.ini");
+    Serial.println("[MEM][ERRO] tem board_build.arduino.memory_type = qio_opi.");
+    Serial.println("[MEM][ERRO] ATENCAO: sem PSRAM, os GPIO 33 a 37 ficam livres —");
+    Serial.println("[MEM][ERRO] mas a tabela de pinagem assume que estao ocupados.");
+    Serial.flush();
+    return;
+  }
+
+  const size_t total = ESP.getPsramSize();
+  const size_t livre = ESP.getFreePsram();
+  Serial.printf("[MEM] PSRAM: %u bytes (%u MB), %u livres\n",
+                static_cast<unsigned>(total),
+                static_cast<unsigned>(total / (1024UL * 1024UL)),
+                static_cast<unsigned>(livre));
+  Serial.flush();
+
+  constexpr size_t TAM_TESTE = 64UL * 1024UL;
+  volatile uint8_t* buffer = static_cast<volatile uint8_t*>(ps_malloc(TAM_TESTE));
+  if (buffer == nullptr) {
+    Serial.printf("[MEM][ERRO] PSRAM detectada mas ps_malloc(%u) falhou\n",
+                  static_cast<unsigned>(TAM_TESTE));
+    Serial.flush();
+    return;
+  }
+
+  // volatile de proposito: sem ele o compilador tem todo o direito de
+  // concluir que ler de volta o que acabou de escrever e redundante, apagar
+  // o teste inteiro e deixar um "PSRAM OK" que nunca tocou na memoria.
+  for (size_t i = 0; i < TAM_TESTE; i++) {
+    buffer[i] = static_cast<uint8_t>((i * 31u) ^ (i >> 8));
+  }
+
+  size_t erros = 0;
+  size_t primeiroErro = 0;
+  for (size_t i = 0; i < TAM_TESTE; i++) {
+    const uint8_t esperado = static_cast<uint8_t>((i * 31u) ^ (i >> 8));
+    if (buffer[i] != esperado) {
+      if (erros == 0) primeiroErro = i;
+      erros++;
+    }
+  }
+  free(const_cast<uint8_t*>(buffer));
+
+  if (erros == 0) {
+    Serial.printf("[MEM] PSRAM OK: %u bytes escritos e conferidos\n",
+                  static_cast<unsigned>(TAM_TESTE));
+  } else {
+    Serial.printf("[MEM][ERRO] PSRAM CORROMPENDO: %u de %u bytes errados, "
+                  "primeiro no offset %u\n",
+                  static_cast<unsigned>(erros), static_cast<unsigned>(TAM_TESTE),
+                  static_cast<unsigned>(primeiroErro));
+    Serial.println("[MEM][ERRO] O controlador responde mas a memoria nao guarda dado.");
+  }
+  Serial.flush();
+}
+
 }  // namespace
 
 // main.cpp fica pequeno: só inicializa os módulos, cria a tarefa do núcleo
@@ -95,6 +178,8 @@ void setup() {
   // calibração dos 4 cantos, que é bloqueante (espera o usuário). Fazer
   // isso antes do cartão evita a montagem do SD ficar pendurada esperando
   // um toque.
+  verificarMemoria();
+
   Serial.println("[BOOT] Iniciando GPIOs/display/touch/LEDs (ihm)");
   Serial.flush();
   ihm::init();

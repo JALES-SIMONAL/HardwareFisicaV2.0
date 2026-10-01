@@ -149,3 +149,30 @@ produzem imagem corrompida e toque instavel. Com **J1 fechado**, VCC = 3.3V
 direto. Os pinos de dados sao 3.3V nos dois casos.
 
 O cartao precisa estar formatado em **FAT32**.
+
+## Se o cartao estiver num modulo SEPARADO
+
+A tabela acima descreve o slot de cartao EMBUTIDO no modulo da tela
+(pinos 15 a 18 do conector de 19 vias). Um modulo avulso de microSD no
+lugar dele e outra configuracao, e os modulos comuns (placa azul com
+regulador AMS1117 e buffer 74LVC125) tem dois defeitos de projeto que
+derrubam exatamente este barramento:
+
+1. **O buffer do MISO costuma ficar sempre habilitado.** O OE do
+   74LVC125 vem amarrado ao terra em vez de seguir o CS, entao o modulo
+   dirige o fio de MISO o tempo todo, inclusive desselecionado. Nada
+   mais consegue responder nesse fio: o toque fica mudo e o slot da
+   tela tambem. O display continua perfeito, porque nunca le.
+
+2. **O regulador exige folga de tensao.** O AMS1117 tem dropout de ~1.1V
+   e o modulo foi feito para VCC = 5V. Alimentado com 3V3, a saida cai
+   para ~2.2V e o cartao nao responde nem ao CMD0 — o log mostra
+   `Card Failed! cmd: 0x00` seguido de `f_mount failed: (3)`.
+
+Os dois defeitos podem agir juntos e produzir, de uma so vez, o quadro
+de "toque e cartao mortos, tela boa". Teste decisivo e gratuito:
+desligue o modulo do barramento (basta o fio de MISO) e reinicie. Se o
+toque voltar, era o buffer.
+
+Usando modulo separado, os pinos 15 a 18 do conector da tela ficam SEM
+ligacao — sao do slot embutido, que nao esta mais em uso.

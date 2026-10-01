@@ -230,7 +230,7 @@ void setup() {
   marcarEtapa("relato de memoria interna");
   relatarMemoriaInterna();
 
-  marcarEtapa("ihm (GPIO/display/touch/LEDs)");
+  marcarEtapa("ihm (GPIO/display/LEDs)");
   ihm::init();
 
   marcarEtapa("configuracoes (NVS)");
@@ -254,6 +254,12 @@ void setup() {
     Serial.println("[BOOT] microSD indisponivel - aplicacao continuara");
     Serial.flush();
   }
+
+  // DEPOIS do cartao, de proposito: a calibracao do toque pode bloquear
+  // esperando um toque, e a verificacao do cartao nao pode ficar atras
+  // dessa espera. Ver o comentario em ihm::initToque().
+  marcarEtapa("toque (diagnostico/calibracao)");
+  ihm::initToque();
 
   experimentos::init();
 

@@ -677,13 +677,46 @@ bool lerToqueBruto(int16_t& x, int16_t& y) {
 //   z sempre no maximo    -> linha presa; MISO em curto ou sem pull.
 //   z varia ao tocar      -> o controlador esta bom, o problema e a
 //                            calibracao ou o mapeamento das coordenadas.
+// Decide se vale CHAMAR A CALIBRACAO, nao se o chip existe — e essa a
+// pergunta que importa, porque tft.calibrateTouch() e um while() sem
+// timeout: ele espera validTouch(..., Z_THRESHOLD/2), ou seja z >= 175
+// (TFT_eSPI/Extensions/Touch.cpp). Se esse z nunca chega, o boot morre ali
+// e nada depois de ihm::init() roda — inclusive o autoteste do cartao.
+//
+// O CRITERIO ANTIGO ERA FRACO E CUSTOU UM BOOT TRAVADO: "z variou" passava
+// com o ruido de fundo do conversor (observado z entre 2 e 18, uma ordem de
+// grandeza abaixo do limiar) e liberava a calibracao num painel que nunca
+// registra contato. Agora sao tres perguntas separadas, porque cada uma
+// aponta para uma parte diferente do hardware:
+//
+//   nada varia              -> o XPT2046 nao fala: T_CS ou o barramento SPI.
+//   varia, mas z < limiar   -> o chip fala e o barramento esta bom; o que
+//                              nao fecha e o contato. Suspeito: o flex/os
+//                              eletrodos do painel resistivo.
+//   z ok, mas um eixo preso -> aquele eixo do painel esta aberto (um valor
+//                              cravado em 0 ou no fundo de escala nas duas
+//                              dezenas de amostras nao e leitura, e fio
+//                              solto).
 bool diagnosticarToque() {
   constexpr uint32_t DURACAO_MS = 4000;
+  // Exatamente o que calibrateTouch() exige: ela chama
+  // validTouch(&x, &y, Z_THRESHOLD/2) (TFT_eSPI/Extensions/Touch.cpp). Medir
+  // por um limiar mais frouxo que o dela daria o "ok" para uma calibracao que
+  // em seguida travaria.
+  //
+  // Z_THRESHOLD vem de -DZ_THRESHOLD no platformio.ini, nao do padrao interno
+  // da biblioteca: Touch.cpp a declara com #ifndef, entao a definicao do
+  // build vale para os dois lados e os limiares nao podem divergir.
+  constexpr uint16_t LIMIAR_CONTATO = Z_THRESHOLD / 2;
   Serial.println("[TOUCH][DIAG] Leitura crua por 4s — TOQUE NA TELA AGORA");
-  Serial.println("[TOUCH][DIAG]   z=0 sempre -> controlador mudo (pontes/T_CS)");
+  Serial.printf("[TOUCH][DIAG]   contato conta a partir de z >= %u\n", LIMIAR_CONTATO);
   Serial.flush();
 
   uint16_t zMin = 0xFFFF, zMax = 0;
+  uint16_t xMin = 0xFFFF, xMax = 0;
+  uint16_t yMin = 0xFFFF, yMax = 0;
+  uint16_t amostras = 0;
+  uint16_t amostrasComContato = 0;
   const uint32_t inicio = millis();
   while (millis() - inicio < DURACAO_MS) {
     uint16_t x = 0, y = 0;
@@ -691,17 +724,57 @@ bool diagnosticarToque() {
     tft.getTouchRaw(&x, &y);
     if (z < zMin) zMin = z;
     if (z > zMax) zMax = z;
+    if (x < xMin) xMin = x;
+    if (x > xMax) xMax = x;
+    if (y < yMin) yMin = y;
+    if (y > yMax) yMax = y;
+    ++amostras;
+    if (z >= LIMIAR_CONTATO) ++amostrasComContato;
     Serial.printf("[TOUCH][DIAG] z=%5u  x=%5u  y=%5u\n", z, x, y);
     Serial.flush();
     delay(200);
   }
 
-  const bool respondeu = (zMax != zMin);
-  Serial.printf("[TOUCH][DIAG] z variou de %u a %u -> %s\n", zMin, zMax,
-                respondeu ? "variou: controlador respondendo"
-                               : "SEM VARIACAO: controlador nao respondeu");
+  const bool algoVariou = (zMax != zMin) || (xMax != xMin) || (yMax != yMin);
+  const bool houveContato = (amostrasComContato > 0);
+  const bool xVariou = (xMax != xMin);
+  const bool yVariou = (yMax != yMin);
+
+  Serial.printf("[TOUCH][DIAG] %u amostras | z %u..%u | x %u..%u | y %u..%u\n", amostras, zMin,
+                zMax, xMin, xMax, yMin, yMax);
+  Serial.printf("[TOUCH][DIAG] amostras com contato (z >= %u): %u\n", LIMIAR_CONTATO,
+                amostrasComContato);
+
+  if (!algoVariou) {
+    Serial.println("[TOUCH][DIAG] VEREDITO: controlador MUDO - nada variou.");
+    Serial.println("[TOUCH][DIAG] Suspeitos: T_CS ou o barramento SPI do toque.");
+    Serial.flush();
+    return false;
+  }
+
+  if (!houveContato) {
+    Serial.println("[TOUCH][DIAG] VEREDITO: o XPT2046 RESPONDE (as leituras variam),");
+    Serial.println("[TOUCH][DIAG] mas nenhum contato chegou ao limiar. O barramento");
+    Serial.println("[TOUCH][DIAG] SPI e o T_CS estao bons; o que nao fecha e o");
+    Serial.println("[TOUCH][DIAG] contato. Suspeito: o flex/os eletrodos do painel.");
+    Serial.println("[TOUCH][DIAG] (Se voce nao tocou na tela durante os 4s, repita.)");
+    Serial.flush();
+    return false;
+  }
+
+  if (!xVariou || !yVariou) {
+    Serial.printf("[TOUCH][DIAG] VEREDITO: contato detectado, mas o eixo %s esta\n",
+                  !xVariou ? "X" : "Y");
+    Serial.println("[TOUCH][DIAG] cravado num valor unico - esse eixo do painel esta");
+    Serial.println("[TOUCH][DIAG] aberto. Calibrar com um eixo morto gravaria uma");
+    Serial.println("[TOUCH][DIAG] calibracao invalida na NVS.");
+    Serial.flush();
+    return false;
+  }
+
+  Serial.println("[TOUCH][DIAG] VEREDITO: toque saudavel - calibracao liberada.");
   Serial.flush();
-  return respondeu;
+  return true;
 }
 
 }  // namespace
@@ -718,7 +791,7 @@ void init() {
   Serial.printf("[DISPLAY] TFT_SCLK: %d | TFT_MOSI: %d | TFT_MISO: %d | TOUCH_CS: %d\n", TFT_SCLK,
                 TFT_MOSI, TFT_MISO, TOUCH_CS);
 
-  Serial.println("[IHM] 1/7 buzzer"); Serial.flush();
+  Serial.println("[IHM] 1/6 buzzer"); Serial.flush();
   pinMode(BUZZER_PIN, OUTPUT);
   // Tira o tone() do canal LEDC 0 (padrão dele) antes de qualquer beep —
   // ver o comentário em BRILHO_PWM_CANAL. Sem isto, o primeiro beep rouba
@@ -749,10 +822,10 @@ void init() {
   Serial.printf("[DISPLAY] SD desselecionado (pino %d em HIGH) antes de iniciar o painel\n",
                 SD_CS_PIN);
 
-  Serial.println("[IHM] 2/7 tft.init()"); Serial.flush();
+  Serial.println("[IHM] 2/6 tft.init()"); Serial.flush();
   tft.init();
   tft.setRotation(ROTACAO_DISPLAY);
-  Serial.println("[IHM] 3/7 painel iniciado"); Serial.flush();
+  Serial.println("[IHM] 3/6 painel iniciado"); Serial.flush();
 
   // O ID do controlador é lido só para DIAGNÓSTICO, e nunca para decidir se
   // a tela existe.
@@ -791,7 +864,47 @@ void init() {
   delay(500);
   tft.fillScreen(COR_FUNDO);
 
-  Serial.println("[IHM] 4/7 lendo calibracao do toque na NVS"); Serial.flush();
+
+
+  Serial.println("[IHM] 4/6 PWM do backlight"); Serial.flush();
+  if (FORCE_DISPLAY_BACKLIGHT_DIAGNOSTIC) {
+    // NÃO anexa o pino ao LEDC: ledcAttachPin() assume o controle do
+    // estágio de saída do GPIO e zera o duty até o primeiro ledcWrite(),
+    // o que apagaria o backlight mesmo depois do digitalWrite(HIGH) acima.
+    Serial.println("[DISPLAY] Diagnostico: backlight em modo GPIO puro (LEDC nao anexado)");
+  } else {
+    ledcSetup(BRILHO_PWM_CANAL, BRILHO_PWM_FREQ_HZ, BRILHO_PWM_RESOLUCAO_BITS);
+    ledcAttachPin(TFT_BL, BRILHO_PWM_CANAL);
+  }
+  setBrilho(BRILHO_NIVEL_MAXIMO);
+
+  Serial.printf("[LEDS] Inicializando NeoPixel (GPIO %d, %d LEDs)\n", PIN_NEO, NUM_LEDS);
+  Serial.println("[IHM] 5/6 NeoPixel"); Serial.flush();
+  pixels.begin();
+  pixels.clear();
+  pixels.show();
+
+  Serial.println("[IHM] 6/6 concluido"); Serial.flush();
+}
+
+bool displayDisponivel() { return displayOk; }
+bool toqueDisponivel() { return toqueOk; }
+
+// Passo do toque, separado de init() DE PROPOSITO.
+//
+// A calibracao dos 4 cantos e bloqueante: tft.calibrateTouch() espera um
+// toque sem timeout. Enquanto ela morava dentro de init(), TUDO o que vem
+// depois em setup() ficava atras dessa espera — inclusive
+// armazenamento::init() e o autoteste do cartao. Num painel que nao
+// registra contato, o boot parava em "calibrando agora" e a verificacao do
+// cartao nunca era impressa, dando a impressao de que ela nao existia.
+//
+// Agora main.cpp chama: ihm::init() (tela e LEDs, nada bloqueante) ->
+// microSD + autoteste -> ihm::initToque(). O diagnostico do cartao sai
+// sempre, independente do estado do toque, e a tela ja esta viva para
+// mostrar os alvos da calibracao quando ela for cabivel.
+void initToque() {
+  Serial.println("[IHM] toque: lendo calibracao na NVS"); Serial.flush();
   const bool toqueResponde = diagnosticarToque();
 
   // ---- Calibração do touch ----
@@ -830,30 +943,8 @@ void init() {
     toqueOk = false;
     Serial.println("[TOUCH] Toque desabilitado nesta sessao (hardware mudo).");
   }
-
-  Serial.println("[IHM] 5/7 PWM do backlight"); Serial.flush();
-  if (FORCE_DISPLAY_BACKLIGHT_DIAGNOSTIC) {
-    // NÃO anexa o pino ao LEDC: ledcAttachPin() assume o controle do
-    // estágio de saída do GPIO e zera o duty até o primeiro ledcWrite(),
-    // o que apagaria o backlight mesmo depois do digitalWrite(HIGH) acima.
-    Serial.println("[DISPLAY] Diagnostico: backlight em modo GPIO puro (LEDC nao anexado)");
-  } else {
-    ledcSetup(BRILHO_PWM_CANAL, BRILHO_PWM_FREQ_HZ, BRILHO_PWM_RESOLUCAO_BITS);
-    ledcAttachPin(TFT_BL, BRILHO_PWM_CANAL);
-  }
-  setBrilho(BRILHO_NIVEL_MAXIMO);
-
-  Serial.printf("[LEDS] Inicializando NeoPixel (GPIO %d, %d LEDs)\n", PIN_NEO, NUM_LEDS);
-  Serial.println("[IHM] 6/7 NeoPixel"); Serial.flush();
-  pixels.begin();
-  pixels.clear();
-  pixels.show();
-
-  Serial.println("[IHM] 7/7 concluido"); Serial.flush();
+  Serial.println("[IHM] toque: concluido"); Serial.flush();
 }
-
-bool displayDisponivel() { return displayOk; }
-bool toqueDisponivel() { return toqueOk; }
 
 void calibrarToque() {
   if (!displayOk) return;

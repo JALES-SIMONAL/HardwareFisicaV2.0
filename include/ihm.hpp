@@ -6,6 +6,11 @@ namespace ihm {
 
 void init();
 
+// Diagnostico + calibracao do toque. PODE BLOQUEAR (a calibracao dos 4
+// cantos espera toques), por isso esta fora de init() e e chamada depois
+// do microSD em main.cpp — ver o comentario em ihm.cpp.
+void initToque();
+
 // true se o display inicializou. Quando false, todas as funções de desenho
 // abaixo viram no-op (não tocam no driver do display) — o restante do
 // firmware (touch, LEDs, sensores, Bluetooth, SD) continua funcionando.

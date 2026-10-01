@@ -180,31 +180,19 @@ void setup() {
 
   Serial.begin(SERIAL_BAUD_RATE);
 
-  // ESPERA O USB ENUMERAR ANTES DE QUALQUER COISA QUE POSSA FALHAR.
+  // O Serial sai pela UART0 (GPIO43/44), na porta do conversor CH343 — ver
+  // o comentario de -DARDUINO_USB_CDC_ON_BOOT=0 no platformio.ini. Isso
+  // importa para o diagnostico: o console do ESP-IDF e o "Guru Meditation"
+  // de um panic usam essa MESMA saida, entao as marcas [BOOT] abaixo e o
+  // erro que eventualmente derrubar a placa aparecem na mesma janela, na
+  // ordem real.
   //
-  // Neste ESP32-S3 o Serial do sketch sai pela USB nativa. Se o firmware
-  // trava logo no inicio e a placa entra em ciclo de reinicio, o USB nunca
-  // chega a enumerar e NENHUMA linha deste setup() alcanca o PC — a tela do
-  // monitor fica so com o "ESP-ROM:.../load:.../entry ..." do bootloader da
-  // ROM, que fala por outro caminho. O sintoma vira "reinicia sem dizer
-  // nada", que nao da para diagnosticar.
-  //
-  // Os 3s abaixo dao tempo ao host de reconhecer a porta antes do primeiro
-  // modulo ser inicializado, entao as marcas [BOOT] passam a chegar e da
-  // para ver EXATAMENTE em qual etapa o firmware morre.
-  //
-  // Vale saber, porque foi o que confundiu o diagnostico: a mensagem de
-  // "Guru Meditation" do ESP-IDF NAO sai por aqui — o console de panico
-  // deste build e a UART0 (GPIO43/44), que na placa nao esta ligada em
-  // nada. Para ler o panico e preciso um conversor USB-serial no GPIO43.
-  // Estas marcas [BOOT] sao o substituto pratico: a ultima que aparecer
-  // indica a etapa que travou.
-  const unsigned long limiteEsperaUsbMs = 3000;
-  const unsigned long inicioEsperaMs = millis();
-  while (!Serial && (millis() - inicioEsperaMs) < limiteEsperaUsbMs) {
-    delay(10);
-  }
-  delay(500);
+  // A UART0 nao precisa enumerar nada: ela ja esta transmitindo no primeiro
+  // byte. A espera de ate 3s que existia aqui era para o USB nativo, onde o
+  // host leva um tempo para reconhecer a porta e as primeiras linhas se
+  // perdiam. Mantida uma pausa curta so para o monitor do host assentar
+  // depois do reset que o CH343 provoca ao abrir a porta.
+  delay(200);
 
   Serial.println();
   Serial.println("========================================");

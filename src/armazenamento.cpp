@@ -230,7 +230,20 @@ void init() {
   TravaBarramentoSD travaBus;
   cartaoOk = iniciarCartao();
   if (!cartaoOk) {
-    Serial.println("[SD] Falha ao montar o cartao (verifique SD_CS_PIN em MAIN.HPP)");
+    Serial.println("[SD] FALHA ao montar o cartao.");
+    Serial.printf("[SD] Pinagem usada: CS=%d  SCK=%d  MOSI=%d  MISO=%d\n", SD_CS_PIN, TFT_SCLK,
+                  TFT_MOSI, TFT_MISO);
+    // "Card Failed! cmd: 0x00" no log do ESP-IDF e o CMD0 (GO_IDLE_STATE),
+    // o primeiro comando do protocolo. Falhar nele quer dizer que o cartao
+    // nao respondeu NADA — nao e questao de formatacao nem de sistema de
+    // arquivos, e sim de o comando nao ter chegado ou a resposta nao ter
+    // voltado. Por isso a lista abaixo e so de hardware.
+    Serial.println("[SD] Se o log do IDF mostrar \"Card Failed! cmd: 0x00\", o cartao");
+    Serial.println("[SD] nao respondeu ao primeiro comando. Confira, nesta ordem:");
+    Serial.printf("[SD]   1. o fio do CS chega mesmo ao GPIO%d?\n", SD_CS_PIN);
+    Serial.println("[SD]   2. o cartao esta encaixado e e alimentado em 3V3?");
+    Serial.printf("[SD]   3. MISO do cartao chega ao GPIO%d? (o display escreve\n", TFT_MISO);
+    Serial.println("[SD]      sem ler, entao a tela funcionar nao prova o MISO)");
     Serial.println("[SD] Aplicacao continuara em modo sem armazenamento");
   } else {
     Serial.println("[SD] microSD montado com sucesso");

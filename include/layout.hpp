@@ -16,10 +16,16 @@ namespace layout {
 constexpr int16_t UI_REFERENCE_WIDTH = 128;
 constexpr int16_t UI_REFERENCE_HEIGHT = 160;
 
-// Rotação inicial do display. 0 neste painel (ILI9342), que já é deitado
-// por natureza — ver o bloco do driver no platformio.ini. Na versão
-// anterior era 1, porque o ST7735 era retrato e precisava ser girado.
-constexpr uint8_t UI_REFERENCE_ROTATION = 0;
+// Rotação inicial do display. 2 = paisagem virada 180 graus, para o módulo
+// montado de cabeça para baixo. A rotação 0 deste painel (ILI9342) já é
+// paisagem, porque ele é deitado por natureza — ver o bloco do driver no
+// platformio.ini. Na versão anterior era 1, porque o ST7735 era retrato e
+// precisava ser girado.
+//
+// Tem de acompanhar ROTACAO_DISPLAY em ihm.cpp: os dois descrevem a mesma
+// tela, e divergirem faria o layout ser calculado para uma orientação
+// diferente da que o painel exibe.
+constexpr uint8_t UI_REFERENCE_ROTATION = 2;
 
 // Margens, cabeçalho/rodapé e espaçamento de referência (na resolução acima).
 constexpr int16_t UI_MARGIN = 4;

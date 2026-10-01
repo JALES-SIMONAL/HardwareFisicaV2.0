@@ -92,9 +92,17 @@ constexpr uint8_t BUZZER_PWM_CANAL = 4;
 // intensidade sem amplificador externo.
 constexpr uint16_t BUZZER_FREQUENCIA_HZ = 2000;
 
-// Rotacao do painel. 0 = paisagem 320x240 neste ILI9342 (o painel e deitado
-// por natureza — ver o bloco do driver no platformio.ini).
-constexpr uint8_t ROTACAO_DISPLAY = 0;
+// Rotacao do painel. Neste ILI9342 a rotacao 0 ja e paisagem 320x240 (o
+// painel e deitado por natureza — ver o bloco do driver no platformio.ini);
+// 2 e a mesma paisagem virada 180 graus, para o modulo montado de cabeca
+// para baixo na caixa.
+//
+// Mudar este valor invalida sozinho a calibracao gravada na NVS, porque
+// assinaturaCalibracao() o inclui. Isso importa: a calibracao converte
+// coordenadas cruas em pixels, e girar a tela sem descartar a antiga faria
+// o toque responder no ponto espelhado — um erro que parece
+// descalibracao, nao rotacao, e manda procurar no lugar errado.
+constexpr uint8_t ROTACAO_DISPLAY = 2;
 
 // ---------------------------------------------------------------------
 // Toque (XPT2046)

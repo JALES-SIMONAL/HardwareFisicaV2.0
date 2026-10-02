@@ -104,8 +104,25 @@ SemaphoreHandle_t mutexBt = nullptr;
 
 class TravaBt {
  public:
-  TravaBt() { xSemaphoreTakeRecursive(mutexBt, portMAX_DELAY); }
-  ~TravaBt() { xSemaphoreGiveRecursive(mutexBt); }
+  // mutexBt so existe depois de init(). Antes disso, tomar o mutex e um
+  // assert fatal do FreeRTOS (xQueueTakeMutexRecursive com handle nulo), nao
+  // um no-op — e funcoes publicas deste modulo sao chamadas ANTES de init():
+  // maquina_estados::tick() roda uma vez dentro de setup(), antes de
+  // bluetooth_app::init(), e o heartbeat de la chama conectado().
+  //
+  // O loop() ja se protegia com a guarda "iniciado", mas os demais
+  // acessores nao — a protecao estava no lugar errado. Aqui ela cobre todos
+  // de uma vez. Antes de init() nao ha o que proteger: a pilha BLE nao
+  // existe, entao nao ha outra tarefa mexendo neste estado.
+  TravaBt() : ativa_(mutexBt != nullptr) {
+    if (ativa_) xSemaphoreTakeRecursive(mutexBt, portMAX_DELAY);
+  }
+  ~TravaBt() {
+    if (ativa_) xSemaphoreGiveRecursive(mutexBt);
+  }
+
+ private:
+  const bool ativa_;
 };
 
 // mac[0] é o primeiro octeto (mesma ordem de exibição humana); getNative()
@@ -239,6 +256,8 @@ void processarLinha(char* linha) {
   } else if (std::strcmp(acao, "set_channel_test_active") == 0) {
     cmd.tipo = comandos::CommandType::SetChannelTestActive;
     cmd.valor = (doc["ativo"] | false) ? 1 : 0;
+  } else if (std::strcmp(acao, "calibrate_touch") == 0) {
+    cmd.tipo = comandos::CommandType::CalibrateTouch;
   } else {
     return;
   }
@@ -664,6 +683,20 @@ void publicarResultadoAcaoProtegida(const char* acao, bool ok) {
   doc["topico"] = "resultado_acao_protegida";
   doc["acao"] = acao;
   doc["ok"] = ok;
+
+  char payload[96];
+  const size_t tamanho = serializeJson(doc, payload, sizeof(payload));
+  enviarLinha(payload, tamanho);
+}
+
+void publicarCalibracaoToque(const char* estado, const char* motivo) {
+  TravaBt trava;
+  if (!clienteConectado) return;
+
+  JsonDocument doc;
+  doc["topico"] = "calibracao_toque";
+  doc["estado"] = estado;
+  if (motivo != nullptr) doc["motivo"] = motivo;
 
   char payload[96];
   const size_t tamanho = serializeJson(doc, payload, sizeof(payload));

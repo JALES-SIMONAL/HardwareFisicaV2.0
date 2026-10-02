@@ -1,6 +1,40 @@
+// IHM local — porte do ST7735 + encoder rotativo (Arduino_GFX bit-bang) para
+// display SPI + touch resistivo XPT2046 via TFT_eSPI.
+//
+// O QUE MUDOU EM RELACAO A BRANCH main, E POR QUE
+//
+// 1) Biblioteca de display: Arduino_GFX (Arduino_SWSPI, bit-bang por
+//    digitalWrite) -> TFT_eSPI (SPI de hardware). Consequencia importante e
+//    boa: sumiu toda a disputa de barramento com o cartao SD. Na main, o
+//    display bit-bangava os MESMOS pinos que o SD usava em SPI de hardware,
+//    entao era preciso reconfigurar pinMode()/SPI.begin() a cada troca de
+//    dono, com um comentario enorme explicando corrupcao de cartao. Aqui os
+//    dois usam o MESMO periferico de hardware (ver armazenamento.cpp) e se
+//    alternam so pelo CS, como o barramento SPI foi feito para funcionar.
+//
+// 2) Canvas em RAM: a main desenhava num Arduino_Canvas (framebuffer) e so
+//    depois dava flush(), porque cada pixel via bit-bang era lentissimo e a
+//    tela piscava. Com SPI de hardware o desenho vai direto ao painel; o
+//    flush() deixou de existir. Se ainda incomodar o piscado no redesenho de
+//    tela cheia, o caminho e subir SPI_FREQUENCY no platformio.ini (a tela
+//    inteira sao ~150KB: 123ms a 10MHz, 31ms a 40MHz).
+//
+// 3) Entrada: encoder -> toque. A traducao esta explicada em detalhe em
+//    ihm.hpp; em resumo, o toque num item enfileira a MESMA sequencia de
+//    eventos que o encoder geraria (mover N passos + confirmar), entao a
+//    maquina de estados nao precisou ser reescrita.
+//
+// 4) Rodape: na main era um texto de dica ("Gire para ajustar, KEY
+//    confirma"). Aqui virou uma barra fixa de quatro botoes tocaveis —
+//    Voltar, cima, baixo e OK — presentes em TODAS as telas, sempre na mesma
+//    posicao. Isso e o que garante que nenhuma tela fique sem saida: com
+//    encoder sempre havia o item "Voltar" na lista, mas telas como grafico e
+//    mensagem dependiam de "clicar em qualquer coisa".
+
 #include <Arduino.h>
 #include <Adafruit_NeoPixel.h>
-#include <Arduino_GFX_Library.h>
+#include <Preferences.h>
+#include <TFT_eSPI.h>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -14,43 +48,89 @@ namespace ihm {
 
 namespace {
 
-// Dimensões NATIVAS (pré-rotação) do painel — usadas só para construir os
-// objetos ST7735/Canvas abaixo. NUNCA usar estas duas constantes para
-// limpar/desenhar: o painel opera rotacionado (paisagem), então a
-// largura/altura realmente visíveis são display->width()/display->height()
-// (já refletem a rotação) — ver bug corrigido em limparFaixa()/
-// escreverTelaApp() (uma faixa à direita não era apagada porque essas
-// funções limpavam só TFT_LARGURA_NATIVA px, menos que a largura real).
-constexpr int16_t TFT_LARGURA_NATIVA = 128;
-constexpr int16_t TFT_ALTURA_NATIVA = 160;
-constexpr uint16_t COR_FUNDO = 0x0000;
+// Fundo = "surface" do tema do app, nao preto puro: no MD3 escuro a
+// superficie e um cinza-azulado bem escuro, e o contraste do cartao
+// contra ela e o que da o relevo das listas.
+constexpr uint16_t COR_FUNDO = UI_COR_SUPERFICIE;
 // Cabeçalho, título e seleção vêm de MAIN.HPP (UI_COR_CABECALHO/
 // UI_COR_TEXTO_CABECALHO/UI_COR_SELECIONADO/UI_COR_TEXTO_SELECIONADO) —
 // ajustáveis ali sem precisar mexer neste arquivo.
 constexpr uint16_t COR_CABECALHO = UI_COR_CABECALHO;
 constexpr uint16_t COR_TITULO = UI_COR_TEXTO_CABECALHO;
-constexpr uint16_t COR_VALOR = 0xFFE0;
-constexpr uint16_t COR_RODAPE = 0xC618;
-constexpr uint16_t COR_TEXTO = 0xFFFF;
+constexpr uint16_t COR_VALOR = UI_COR_PRIMARIA;
+constexpr uint16_t COR_RODAPE = UI_COR_TEXTO_SECUNDARIO;
+constexpr uint16_t COR_TEXTO = UI_COR_TEXTO_PRINCIPAL;
 constexpr uint16_t COR_SELECIONADO = UI_COR_SELECIONADO;
 constexpr uint16_t COR_TEXTO_SELECIONADO = UI_COR_TEXTO_SELECIONADO;
 
 // PWM do brilho da tela (TFT_BL). Centraliza canal/frequência/resolução.
-constexpr uint8_t BRILHO_PWM_CANAL = 0;
+//
+// O CANAL NÃO PODE SER 0. O tone() do Arduino-ESP32 usa o canal LEDC 0 por
+// padrão (Tone.cpp: "static uint8_t _channel = 0") e, a cada nota, chama
+// ledcAttachPin(pinoDoBuzzer, 0). Isso REATRIBUI o canal 0 ao pino do
+// buzzer — e o pino do backlight, que estava preso nesse mesmo canal, fica
+// sem sinal: a tela apaga no primeiro beep e não volta mais.
+//
+// Na versão anterior (branch main) as duas coisas também estavam no canal
+// 0, mas o bug ficava escondido porque lá FORCE_DISPLAY_BACKLIGHT_DIAGNOSTIC
+// era true e o backlight nunca chegava a ser anexado ao LEDC — ficava só no
+// digitalWrite(HIGH). Ao desligar esse diagnóstico neste porte, o conflito
+// que já existia apareceu.
+constexpr uint8_t BRILHO_PWM_CANAL = 2;
 constexpr uint32_t BRILHO_PWM_FREQ_HZ = 5000;
 constexpr uint8_t BRILHO_PWM_RESOLUCAO_BITS = 8;
 constexpr uint8_t BRILHO_NIVEL_MAXIMO = 30;
+
+// Canal LEDC reservado ao tone(). Definido explicitamente em init() com
+// setToneChannel(), em vez de confiar no padrão: assim o canal do buzzer
+// fica declarado ao lado do canal do backlight, e um não invade o outro por
+// omissão.
+constexpr uint8_t BUZZER_PWM_CANAL = 4;
 
 // Frequência fixa do bipe do buzzer. O volume (0-30) só liga/desliga o som:
 // um buzzer passivo controlado por tone() não tem controle analógico de
 // intensidade sem amplificador externo.
 constexpr uint16_t BUZZER_FREQUENCIA_HZ = 2000;
 
+// Rotacao do painel. Neste ILI9342 a rotacao 0 ja e paisagem 320x240 (o
+// painel e deitado por natureza — ver o bloco do driver no platformio.ini);
+// 2 e a mesma paisagem virada 180 graus, para o modulo montado de cabeca
+// para baixo na caixa.
+//
+// Mudar este valor invalida sozinho a calibracao gravada na NVS, porque
+// assinaturaCalibracao() o inclui. Isso importa: a calibracao converte
+// coordenadas cruas em pixels, e girar a tela sem descartar a antiga faria
+// o toque responder no ponto espelhado — um erro que parece
+// descalibracao, nao rotacao, e manda procurar no lugar errado.
+constexpr uint8_t ROTACAO_DISPLAY = 2;
+
 // ---------------------------------------------------------------------
-// Indicação de conexão/desconexão BLE (ver iniciarIndicacaoConexao/
-// iniciarIndicacaoDesconexao/atualizarIndicacoes) — máquina de estados por
-// millis(), sem delay(): tick() roda em loop apertado (encoder, display,
-// Bluetooth) e travá-lo por 1.5s deixaria tudo isso sem resposta.
+// Toque (XPT2046)
+// ---------------------------------------------------------------------
+// Limiares de pressao com histerese: precisa passar de Z_TOQUE para o
+// toque comecar, e so termina quando cai abaixo de Z_SOLTA. Sem a
+// histerese, um dedo parado em cima de um botao gera pressao oscilando em
+// torno de um limiar unico e o firmware ve uma rajada de toques repetidos.
+constexpr uint16_t Z_TOQUE = 400;
+constexpr uint16_t Z_SOLTA = 250;
+
+// Tempo minimo entre dois toques aceitos. Touch resistivo tem repique
+// mecanico igual a uma chave: sem isto, um unico toque as vezes conta duas
+// vezes. 60ms cobre o repique real do painel e nao atrapalha o ritmo de uso
+// — os 180ms anteriores eram folgados demais e apareciam como atraso, ainda
+// mais na selecao em dois toques, onde o SEGUNDO toque precisava esperar
+// esse tempo inteiro antes de ser aceito.
+constexpr uint32_t DEBOUNCE_TOQUE_MS = 60;
+
+// Duracao do bipe de retorno do toque. Curto de proposito: e a unica
+// confirmacao de que o toque foi registrado quando o dedo cobre o botao.
+constexpr uint16_t BEEP_TOQUE_MS = 15;
+
+// ---------------------------------------------------------------------
+// Indicação de conexão/desconexão BLE — máquina de estados por millis(),
+// sem delay(): tick() roda em loop apertado (toque, display, Bluetooth) e
+// travá-lo por 1.5s deixaria tudo isso sem resposta.
+// ---------------------------------------------------------------------
 enum class FaseIndicacaoBle : uint8_t {
   Nenhuma,
   ConexaoPisca1On,
@@ -70,23 +150,6 @@ constexpr uint32_t DURACAO_FASE_PISCA_CONEXAO_MS = 375;
 constexpr uint32_t DURACAO_BEEP_CONEXAO_MS = 80;
 constexpr uint32_t DURACAO_FASE_PISCA_DESCONEXAO_MS = 400;
 
-struct EncoderState {
-  int position = 0;
-  int lastA = HIGH;
-};
-
-// Estado independente do EncoderState acima: reporta só o passo mais
-// recente (para navegação em listas), sem posição acumulada/wrap.
-struct EventoEncoderState {
-  int lastS1 = HIGH;
-};
-
-struct TeclaState {
-  int leituraAnterior = HIGH;
-  int estadoEstavel = HIGH;
-  unsigned long ultimaMudancaMs = 0;
-};
-
 struct TelaAppState {
   char titulo[24] = "";
   char valor[24] = "";
@@ -94,78 +157,355 @@ struct TelaAppState {
   bool inicializada = false;
 };
 
-EncoderState encoder;
-EventoEncoderState eventoEncoder;
-TeclaState tecla;
 TelaAppState telaApp;
 uint8_t volumeAtual = BRILHO_NIVEL_MAXIMO;
 
-// true somente se display->begin() teve sucesso. Quando false, todas as
-// funções de desenho abaixo retornam sem tocar no ponteiro do display —
-// evita acesso a um periférico que não respondeu, sem travar o restante
-// do firmware (encoder, LEDs, sensores, Bluetooth, SD continuam ativos).
 bool displayOk = false;
+bool toqueOk = false;
 
-// RAII: toma o mutex do barramento SPI compartilhado (armazenamento.hpp) e,
-// só se o dono estiver de fato mudando (do SD para o display), reconfigura
-// MOSI/SCK/MISO como GPIO simples — necessário porque o microSD usa o
-// periférico de SPI de HARDWARE do ESP32 nos MESMOS pinos físicos (só o CS
-// muda) e pode tê-los roteado para si desde o último acesso ao cartão. Sem
-// isto, o TFT (Arduino_SWSPI, bit-bang via digitalWrite()) simplesmente
-// para de responder fisicamente depois do primeiro SD.begin()/leitura/
-// escrita — mesmo com o código de desenho certo — porque o pino deixa de
-// obedecer digitalWrite() enquanto restar roteado para o periférico de SPI.
+TFT_eSPI tft = TFT_eSPI();
+Preferences prefsToque;
+
+// ---------------------------------------------------------------------
+// Redesenho sem piscar: faixa em memoria + cache do que esta na tela
+// ---------------------------------------------------------------------
+// O piscar que sobrou depois da "passagem unica" (ver limparSobra()) vinha
+// de DENTRO de cada elemento: uma linha de lista era pintada em tres
+// camadas — fundo, cartao, texto — direto no painel, e o olho via o fundo
+// liso entre uma camada e outra. Nas telas ao vivo (teste de canais a cada
+// 200ms, experimento em execucao a cada 500ms) isso se repetia sem parar,
+// mesmo quando nada tinha mudado.
 //
-// Reconfigurar incondicionalmente a cada chamada (em vez de só quando o
-// dono muda) chegou a corromper o cartão na prática ao ler um BMP linha a
-// linha (dezenas de reinicializações de SPI por segundo) — ver comentário
-// grande em armazenamento.hpp.
-class TravaBarramentoDisplay {
+// Duas medidas, que se somam:
+//   1. Cada faixa (cabecalho, linha, botao, tecla) e montada num sprite em
+//      RAM e enviada ao painel de uma vez: o pixel passa direto da cor
+//      antiga para a final, sem estado intermediario visivel.
+//   2. Cada faixa guarda uma assinatura do que desenhou por ultimo (texto,
+//      posicao, selecao...). Se o redesenho pedir exatamente a mesma coisa,
+//      ela nem e enviada. Uma tela ao vivo so reescreve o que mudou — e um
+//      redesenho sem mudanca nao custa SPI nenhum, o que tambem devolve
+//      tempo para a leitura do toque.
+TFT_eSprite spriteFaixa = TFT_eSprite(&tft);
+bool spriteFaixaOk = false;
+// Altura da maior faixa desenhada por sprite: linha/botao de 42px e o valor
+// editavel em fonte grande (40px). 320x48x2 = 30KB — na RAM interna, ja que
+// este ambiente nao habilita a PSRAM. Uma faixa mais alta que isto e
+// desenhada direto no painel (ver desenharEmFaixa()).
+constexpr int16_t ALTURA_SPRITE_FAIXA = 48;
+
+// Posicoes do cache. Os itens (linhas de lista, teclas) usam uma posicao
+// por LINHA NA TELA, nao por item da lista: ao rolar, a linha 0 passa a
+// mostrar outro item, a assinatura muda e ela e redesenhada.
+enum SlotCache : uint8_t {
+  SLOT_CABECALHO = 0,
+  SLOT_DICA = 1,
+  SLOT_BOTAO_RODAPE = 2,  // 2..5, um por botao
+  SLOT_BARRA_ROLAGEM = 6,
+  SLOT_TELA_ESPARSA = 7,  // grafico, QR code, mensagem, fundo do teclado
+  SLOT_PRIMEIRO_ITEM = 8,
+};
+// 40 = maior alfabeto do teclado de texto.
+constexpr uint8_t QTD_SLOTS_CACHE = SLOT_PRIMEIRO_ITEM + 40;
+uint32_t cacheSlots[QTD_SLOTS_CACHE] = {0};
+
+// Quem esta ocupando a area de conteudo (entre cabecalho e rodape). Trocar
+// de tipo invalida o cache dela inteiro: cada tipo pinta a area com
+// geometria propria, e uma assinatura antiga poderia "bater" com algo que
+// ja foi apagado por baixo.
+enum class TipoConteudo : uint8_t { Nenhum, Lista, Valor, Esparso, Teclado };
+TipoConteudo conteudoAtual = TipoConteudo::Nenhum;
+
+// FNV-1a: barato, e uma colisao so custaria uma faixa nao redesenhada.
+class Assinatura {
  public:
-  TravaBarramentoDisplay() {
-    armazenamento::travarBarramentoSPI();
-    if (!armazenamento::donoAtualEhDisplay()) {
-      armazenamento::logDiagnosticoBarramento("ANTES troca SD->Display");
-      // Desseleciona o SD (CS em HIGH) ANTES de bit-bangar as linhas
-      // compartilhadas — sem isto, se SD_CS_PIN ficasse em LOW durante o
-      // bit-bang do TFT, o cartão interpretaria os pulsos de clock como
-      // tráfego SPI real endereçado a ele, corrompendo seu estado interno
-      // (observado na prática: "sdSelectCard(): Select Failed" logo após
-      // o primeiro desenho no display).
-      pinMode(SD_CS_PIN, OUTPUT);
-      digitalWrite(SD_CS_PIN, HIGH);
-      pinMode(TFT_MOSI, OUTPUT);
-      pinMode(TFT_SCLK, OUTPUT);
-      pinMode(TFT_MISO, INPUT);
-      armazenamento::marcarDonoDisplay();
-      armazenamento::logDiagnosticoBarramento("DEPOIS troca SD->Display");
+  Assinatura& bytes(const void* dados, size_t tamanho) {
+    const uint8_t* p = static_cast<const uint8_t*>(dados);
+    for (size_t i = 0; i < tamanho; i++) {
+      h_ ^= p[i];
+      h_ *= 16777619u;
     }
+    return *this;
   }
-  ~TravaBarramentoDisplay() { armazenamento::destravarBarramentoSPI(); }
+  Assinatura& num(int32_t v) { return bytes(&v, sizeof(v)); }
+  Assinatura& texto(const char* s) {
+    if (s == nullptr) return num(-1);
+    return bytes(s, std::strlen(s) + 1);
+  }
+  // 0 e reservado para "posicao desconhecida".
+  uint32_t valor() const { return h_ == 0 ? 1u : h_; }
+
+ private:
+  uint32_t h_ = 2166136261u;
 };
 
+void invalidarSlots(uint8_t de, uint8_t ate) {
+  for (uint8_t i = de; i <= ate && i < QTD_SLOTS_CACHE; i++) cacheSlots[i] = 0;
+}
+
+void invalidarConteudoCache() {
+  cacheSlots[SLOT_DICA] = 0;
+  invalidarSlots(SLOT_BARRA_ROLAGEM, QTD_SLOTS_CACHE - 1);
+}
+
+// Para tudo que pinta a tela fora deste sistema (logos, calibracao, tela do
+// modo aplicativo): dali em diante nenhuma assinatura vale mais.
+void invalidarCacheTela() {
+  invalidarSlots(0, QTD_SLOTS_CACHE - 1);
+  conteudoAtual = TipoConteudo::Nenhum;
+}
+
+void ocuparConteudo(TipoConteudo tipo) {
+  if (conteudoAtual == tipo) return;
+  invalidarConteudoCache();
+  conteudoAtual = tipo;
+}
+
+// true se a faixa precisa ser desenhada (e ja registra a nova assinatura).
+bool slotMudou(uint8_t slot, uint32_t assinatura) {
+  if (slot >= QTD_SLOTS_CACHE) return true;
+  if (cacheSlots[slot] == assinatura) return false;
+  cacheSlots[slot] = assinatura;
+  return true;
+}
+
+// Desenha um retangulo da tela "fora dela": desenho(g, ox, oy) pinta em g
+// com a origem do retangulo em (ox, oy). Com o sprite, g e o sprite e a
+// origem e (0,0); sem ele (sem memoria, ou faixa maior que o sprite), g e o
+// proprio painel e a origem e a posicao real — o resultado e o mesmo, so
+// volta a ter as camadas visiveis.
+template <typename F>
+void desenharEmFaixa(int16_t x, int16_t y, int16_t w, int16_t h, F desenho) {
+  if (w <= 0 || h <= 0) return;
+  if (spriteFaixaOk && w <= spriteFaixa.width() && h <= spriteFaixa.height()) {
+    desenho(static_cast<TFT_eSPI&>(spriteFaixa), 0, 0);
+    spriteFaixa.pushSprite(x, y, 0, 0, w, h);
+  } else {
+    desenho(static_cast<TFT_eSPI&>(tft), x, y);
+  }
+}
+
 Adafruit_NeoPixel pixels(NUM_LEDS, PIN_NEO, NEO_GRB + NEO_KHZ800);
-Arduino_DataBus* bus = new Arduino_SWSPI(TFT_DC, TFT_CS, TFT_SCLK, TFT_MOSI,
-										 TFT_MISO);
-Arduino_GFX* displayFisico = new Arduino_ST7735(bus, TFT_RST, 1, false, TFT_LARGURA_NATIVA,
-										 TFT_ALTURA_NATIVA, 0, 0, 0, 0);
-// display aponta para um canvas em RAM (framebuffer), não direto para o
-// TFT: todo fillScreen()/fillRect()/print() das funções abaixo escreve só
-// na RAM — nada muda na tela física até display->flush() ser chamado,
-// sempre como último passo de cada função desenharX()/escreverX(). Sem
-// isso, cada redesenho ia direto para o SPI bit-bang (lento) e a tela
-// ficava visivelmente preta entre o fillScreen() e o desenho seguinte,
-// causando a sensação de "piscado" a cada atualização.
+
+// ---------------------------------------------------------------------
+// Calibração do touch (persistida na NVS)
+// ---------------------------------------------------------------------
+uint16_t calData[5] = {0, 0, 0, 0, 0};
+
+// A calibração só vale para a geometria em que foi feita: os valores
+// convertem raw -> pixel usando a largura/altura da tela. Guardar a
+// assinatura junto faz uma troca de driver/rotação descartar sozinha uma
+// calibração que ficaria silenciosamente errada.
+uint32_t assinaturaCalibracao() {
+  return (static_cast<uint32_t>(TFT_WIDTH) << 20) ^
+         (static_cast<uint32_t>(TFT_HEIGHT) << 8) ^ ROTACAO_DISPLAY;
+}
+
+// ---------------------------------------------------------------------
+// Zonas tocáveis
+// ---------------------------------------------------------------------
+// Cada desenharX() registra aqui as áreas que respondem ao toque na tela
+// que acabou de montar. O registro é zerado no início de cada desenho: uma
+// tela nunca herda as zonas da anterior (senão o usuário tocaria numa área
+// vazia e ativaria o item que estava ali na tela passada).
+enum class AcaoToque : uint8_t {
+  Nenhuma,
+  ItemLista,   // "indice" = índice do item na lista
+  Confirmar,   // botão OK do rodapé
+  Voltar,      // botão Voltar do rodapé
+  Proximo,     // botão baixo/"+" do rodapé
+  Anterior,    // botão cima/"-" do rodapé
+  ZoomMais,    // só na tela de gráfico — tratado dentro da ihm
+  ZoomMenos,   // idem
+};
+
+struct ZonaToque {
+  int16_t x = 0, y = 0, w = 0, h = 0;
+  AcaoToque acao = AcaoToque::Nenhuma;
+  uint8_t indice = 0;
+  // Rótulo do botão, para repintá-lo no estado pressionado sem ter que
+  // deduzir o texto a partir da ação (o mesmo botão físico é "^" numa tela
+  // e "-" em outra).
+  const char* rotulo = "";
+  bool contem(int16_t px, int16_t py) const {
+    return px >= x && px < x + w && py >= y && py < y + h;
+  }
+};
+
+// 40 = o maior alfabeto do teclado de texto cabe, mais os 4 botões do
+// rodapé. Estouro é ignorado silenciosamente (a zona simplesmente não
+// responde) em vez de corromper memória.
+constexpr uint8_t MAX_ZONAS = 48;
+ZonaToque zonas[MAX_ZONAS];
+uint8_t quantidadeZonas = 0;
+
+// Estado da lista/grade desenhada por último — é o que permite traduzir um
+// toque direto num item para a rajada de passos que o encoder geraria.
+uint8_t indiceSelecionadoAtual = 0;
+uint8_t quantidadeItensAtual = 0;
+
+// ---------------------------------------------------------------------
+// Estado do gráfico (zoom e deslocamento)
+// ---------------------------------------------------------------------
+// Os pontos são COPIADOS para cá, não referenciados: o gesto redesenha o
+// gráfico fora do ciclo normal da máquina de estados, e a essa altura os
+// vetores originais (de analise_linear/analise_circular) podem já não estar
+// mais válidos. 255 é o teto de "quantidade", que é uint8_t.
+constexpr uint16_t MAX_PONTOS_GRAFICO = 255;
+float graficoTempos[MAX_PONTOS_GRAFICO];
+float graficoValores[MAX_PONTOS_GRAFICO];
+uint8_t graficoQuantidade = 0;
+char graficoTitulo[48] = "";
+bool graficoAtivo = false;
+// 1.0 = série inteira na tela. centro é a posição (0..1) do meio da janela
+// visível dentro da faixa total de tempo.
+float graficoZoom = 1.0f;
+float graficoCentro = 0.5f;
+constexpr float GRAFICO_ZOOM_MAX = 16.0f;
+
+
+void limparZonas() {
+  quantidadeZonas = 0;
+  indiceSelecionadoAtual = 0;
+  quantidadeItensAtual = 0;
+  // Sair da tela de grafico desarma os gestos dele (zoom/arrasto lateral).
+  // desenharGrafico() liga isto de novo logo depois de chamar limparZonas().
+  graficoAtivo = false;
+  // Qualquer outra tela pintou por cima da tela do modo aplicativo: na
+  // proxima vez ela precisa se montar do zero, nao so trocar os textos.
+  telaApp.inicializada = false;
+}
+
+void registrarZona(int16_t x, int16_t y, int16_t w, int16_t h, AcaoToque acao,
+                   uint8_t indice = 0, const char* rotulo = "") {
+  if (quantidadeZonas >= MAX_ZONAS) return;
+  // Campo a campo em vez de inicialização por chaves: o projeto compila em
+  // gnu++11, e nesse padrão um struct com inicializadores de membro
+  // (os "= 0" da declaração) deixa de ser agregado, então ZonaToque{...}
+  // não compila. Só a partir de C++14 isso passou a ser permitido.
+  ZonaToque& z = zonas[quantidadeZonas];
+  z.x = x;
+  z.y = y;
+  z.w = w;
+  z.h = h;
+  z.acao = acao;
+  z.indice = indice;
+  z.rotulo = rotulo;
+  quantidadeZonas++;
+}
+
+// ---------------------------------------------------------------------
+// Fila de eventos de navegação
+// ---------------------------------------------------------------------
+// Um toque pode gerar VÁRIOS eventos (mover N itens + confirmar). Eles são
+// entregues um por tick e na ordem de entrada — ver a explicação em
+// ihm.hpp. 64 cabe o maior salto possível numa lista mais o confirmar.
+enum class EventoFila : uint8_t { Proximo, Anterior, Confirmar };
+
+constexpr uint8_t TAM_FILA = 64;
+EventoFila fila[TAM_FILA];
+uint8_t filaInicio = 0;
+uint8_t filaFim = 0;
+
+bool filaVazia() { return filaInicio == filaFim; }
+
+void enfileirar(EventoFila e) {
+  const uint8_t proximo = static_cast<uint8_t>((filaFim + 1) % TAM_FILA);
+  if (proximo == filaInicio) return;  // cheia: descarta em vez de sobrescrever
+  fila[filaFim] = e;
+  filaFim = proximo;
+}
+
+bool voltarPendente = false;
+
+// Estado do toque em si.
+bool tocando = false;
+uint32_t ultimoToqueAceitoMs = 0;
+
+// Cópia da zona em que o dedo encostou — cópia, e não o índice dela no
+// vetor: entre a descida e a subida do dedo a tela pode ter sido
+// redesenhada (a rajada de eventos de um toque anterior ainda sendo
+// processada, um dado ao vivo chegando pelo BLE), e nesse caso limparZonas()
+// já reconstruiu o vetor. Um índice guardado apontaria para outra zona
+// qualquer, e o toque acionaria a coisa errada.
+ZonaToque zonaPressionada;
+bool temZonaPressionada = false;
+
+// Última coordenada VÁLIDA lida enquanto o dedo estava na tela. Na borda de
+// subida não há leitura válida (é justamente a ausência de pressão que
+// define a subida), então é esta posição que diz onde o dedo estava quando
+// soltou — sem ela não dá para saber se o usuário arrastou para fora do
+// botão antes de soltar.
+int16_t ultimoXValido = -1;
+int16_t ultimoYValido = -1;
+
+// A leitura ANTERIOR a ultima. E ela que decide onde o dedo estava ao
+// soltar, e nao a ultima: enquanto o dedo sai, a pressao cai entre Z_TOQUE e
+// Z_SOLTA e o XPT2046 ainda devolve coordenadas, so que escorregando para
+// longe do ponto real. Era essa ultima amostra torta que, passando do
+// limiar de gesto, transformava um toque simples em "arrasto" — o item nao
+// abria e o usuario tinha de tocar de novo.
+int16_t penultimoXValido = -1;
+int16_t penultimoYValido = -1;
+
+// ---------------------------------------------------------------------
+// Gestos
+// ---------------------------------------------------------------------
+// O XPT2046 é resistivo e de PONTO ÚNICO: ele mede uma posição por vez, e
+// com dois dedos na tela devolve um ponto no meio dos dois. Por isso não há
+// (nem pode haver) pinça para ampliar — o gesto de dois dedos é
+// fisicamente indetectável neste hardware. O zoom do gráfico é feito pelos
+// botões - / + do rodapé, e o arrasto de um dedo faz o deslocamento
+// lateral, que é a parte que dá para fazer com um ponto só.
 //
-// IMPORTANTE: o canvas é criado com as dimensões JÁ ROTACIONADAS (largura x
-// altura trocadas em relação ao painel nativo), não TFT_LARGURA_NATIVA x
-// TFT_ALTURA_NATIVA — displayFisico acima já tem rotação 1 (paisagem)
-// aplicada, então seu width()/height() reais são 160x128, não 128x160. Um
-// canvas criado com as dimensões nativas (erro anterior) tem framebuffer
-// menor que a área física visível: display->flush() manda um bitmap
-// 128x160 para um painel de 160x128, deixando uma faixa de ~32px à direita
-// nunca escrita/limpa (o bug de "faixa não apaga no lado direito").
-Arduino_GFX* display = new Arduino_Canvas(TFT_ALTURA_NATIVA, TFT_LARGURA_NATIVA, displayFisico);
+// Gestos implementados:
+//   - arrastar na vertical  -> rola a lista (move a seleção)
+//   - arrastar na horizontal na tela de gráfico -> desloca o gráfico
+//   - deslizar para a direita -> voltar
+//   - toque simples -> ver enfileirarSaltoParaItem()
+
+// Deslocamento a partir do qual o toque deixa de ser "toque" e vira gesto.
+// Abaixo disso é só o tremor natural do dedo em cima do alvo.
+//
+// 20px e nao menos: o tremor do dedo somado ao ruido do resistivo passa com
+// folga de 10px, e um limiar baixo demais fazia toques simples virarem
+// gesto (e nao acionarem nada).
+constexpr int16_t LIMIAR_GESTO_PX = 20;
+
+// Leituras SEGUIDAS fora do limiar para o toque virar gesto. Uma amostra
+// isolada longe do ponto (ruido, ou a borda de soltura) nao basta — um
+// arrasto de verdade produz varias em sequencia.
+constexpr uint8_t LEITURAS_PARA_GESTO = 2;
+uint8_t leiturasForaDoLimiar = 0;
+
+// Deslize horizontal mínimo para contar como "voltar". Exige também ser
+// bem mais horizontal que vertical, senão uma rolagem meio torta viraria
+// um voltar acidental — que é justamente o gesto mais irritante de
+// disparar sem querer.
+constexpr int16_t LIMIAR_DESLIZE_VOLTAR_PX = 70;
+
+int16_t xInicialToque = 0;
+int16_t yInicialToque = 0;
+int16_t yReferenciaArrasto = 0;
+int16_t xReferenciaArrasto = 0;
+// true quando o dedo já passou de LIMIAR_GESTO_PX: a soltura deixa de
+// acionar a zona onde encostou (senão rolar a lista também selecionaria o
+// item de onde a rolagem partiu).
+bool virouGesto = false;
+
+
+// ---------------------------------------------------------------------
+// RAII do barramento SPI compartilhado com o cartão SD.
+// ---------------------------------------------------------------------
+// Muito mais simples que na main: aqui só serializa o acesso (o desenho
+// roda no núcleo 1 e a gravação no cartão no núcleo 0). Não há mais
+// reconfiguração de pinos nem SPI.begin()/end(), porque display e SD usam o
+// MESMO periférico SPI de hardware e se distinguem pelo CS — ver o
+// comentário no topo deste arquivo e em armazenamento.cpp.
+class TravaBarramentoDisplay {
+ public:
+  TravaBarramentoDisplay() { armazenamento::travarBarramentoSPI(); }
+  ~TravaBarramentoDisplay() { armazenamento::destravarBarramentoSPI(); }
+};
 
 bool textoMudou(const char* atual, const char* novoTexto) {
   if (atual == nullptr && novoTexto == nullptr) {
@@ -183,34 +523,80 @@ bool textoMudou(const char* atual, const char* novoTexto) {
 // pelo chamador. Se UI_FONTE_NEGRITO (MAIN.HPP) estiver ativo, reimprime
 // 1px à direita por cima — "negrito" simulado por double-strike, já que a
 // fonte embutida da biblioteca de display não tem uma variante bold de
-// verdade. Centraliza esse comportamento aqui em vez de duplicar a lógica
-// em cada função desenharX()/escreverX() abaixo.
-void imprimirTexto(int16_t x, int16_t y, const char* texto) {
-  display->setCursor(x, y);
-  display->print(texto);
+// verdade.
+void imprimirTexto(TFT_eSPI& g, int16_t x, int16_t y, const char* texto) {
+  g.setCursor(x, y);
+  g.print(texto);
   if (UI_FONTE_NEGRITO) {
-    display->setCursor(x + 1, y);
-    display->print(texto);
+    g.setCursor(x + 1, y);
+    g.print(texto);
   }
 }
 
+void imprimirTexto(int16_t x, int16_t y, const char* texto) { imprimirTexto(tft, x, y, texto); }
+
 void limparFaixa(int16_t y, int16_t altura) {
-  // display->width() (não TFT_LARGURA_NATIVA): o painel é usado rotacionado
-  // (paisagem) e a largura nativa é menor que a largura real visível —
-  // limpar só a largura nativa deixava uma faixa à direita sem apagar.
-  display->fillRect(0, y, display->width(), altura, COR_FUNDO);
+  tft.fillRect(0, y, tft.width(), altura, COR_FUNDO);
+}
+
+// ---------------------------------------------------------------------
+// Redesenho em PASSAGEM ÚNICA (o que eliminou o "piscado" entre telas)
+// ---------------------------------------------------------------------
+// Antes, cada tela começava com fillScreen(preto) e só então desenhava por
+// cima. Isso escreve os MESMOS pixels duas vezes: primeiro tudo preto,
+// depois o conteúdo. A 10MHz a tela cheia leva ~123ms, então o usuário via
+// literalmente a tela apagar e reaparecer — daí a sensação de piscar, que
+// não era flicker de refresh e sim o preto intermediário sendo exibido.
+//
+// Agora nenhuma tela apaga nada antes: cada elemento é desenhado já com o
+// seu próprio fundo, por cima do que estava ali, e no fim apaga-se apenas a
+// SOBRA — a faixa que o conteúdo novo não cobriu (uma lista mais curta que
+// a anterior, por exemplo). Cada pixel é escrito uma vez só, na cor final:
+// metade do tempo e sem estado intermediário visível.
+//
+// A consequência para quem escreve tela nova: todo elemento precisa pintar
+// o próprio fundo. Um texto desenhado sem fundo opaco vai aparecer por cima
+// do conteúdo anterior, não sobre preto.
+
+int16_t yTopoRodape() { return tft.height() - layout::uiFooterHeight(); }
+
+// Onde a área de conteúdo termina: acima da linha de dica, quando a tela
+// tem uma.
+int16_t yFimConteudo(bool comDica) {
+  const uint8_t fonte = layout::uiFontSize(1);
+  return comDica ? static_cast<int16_t>(yTopoRodape() - 8 * fonte - 2) : yTopoRodape();
+}
+
+// Apaga de "yDe" até o fim da área de conteúdo. É a única limpeza que
+// sobrou, e cobre só o que o desenho novo não alcançou.
+void limparSobra(int16_t yDe, bool comDica) {
+  const int16_t ate = yFimConteudo(comDica);
+  if (ate > yDe) tft.fillRect(0, yDe, tft.width(), ate - yDe, COR_FUNDO);
+}
+
+// Apaga a área de conteúdo inteira, preservando cabeçalho e rodapé. Para as
+// telas de desenho ESPARSO (gráfico, QR code, mensagem), onde não dá para
+// pintar o fundo elemento a elemento — uma curva não tem retângulo próprio.
+// Continua melhor que fillScreen: cabeçalho e barra de botões não piscam,
+// porque não são apagados para serem redesenhados iguais logo em seguida.
+void limparConteudo(bool comDica) {
+  const int16_t y0 = layout::uiHeaderHeight();
+  const int16_t y1 = yFimConteudo(comDica);
+  if (y1 > y0) tft.fillRect(0, y0, tft.width(), y1 - y0, COR_FUNDO);
 }
 
 void desenharTextoFaixa(int16_t y, uint8_t tamanho, uint16_t cor,
 						 const char* texto) {
   limparFaixa(y, 24);
-  display->setTextSize(tamanho);
-  display->setTextColor(cor);
+  tft.setTextSize(tamanho);
+  tft.setTextColor(cor);
   imprimirTexto(10, y, texto);
 }
 
 // Trunca "origem" em "destino" para caber em "larguraDisponivelPx", usando
-// "..." quando necessário (fonte padrão GFX: ~6px por caractere * tamanho).
+// "..." quando necessário. A conta de 6px por caractere por unidade de
+// tamanho vale tanto para a fonte GLCD do Adafruit_GFX (usada na main)
+// quanto para a fonte 1 do TFT_eSPI — por isso esta função veio inalterada.
 void truncarTexto(char* destino, size_t tamanhoDestino, const char* origem,
 				   int16_t larguraDisponivelPx, uint8_t tamanhoFonte) {
   const int16_t larguraCaractere = 6 * static_cast<int16_t>(tamanhoFonte);
@@ -251,58 +637,502 @@ int32_t leEndianLongo(const uint8_t* buffer, size_t offset) {
       (static_cast<uint32_t>(buffer[offset + 2]) << 16) | (static_cast<uint32_t>(buffer[offset + 3]) << 24));
 }
 
+// Uma linha de lista inteira — fundo, card, texto e seta ">" — pintada em
+// g com a linha comecando em (ox, oy). O card imita o Card +
+// BorderedListTile do aplicativo. A area que responde ao toque e a linha
+// INTEIRA (mais alta e mais larga que o card); o recuo serve de respiro
+// entre cards e de folga para quem erra a mira um pouco para fora da borda.
+void desenharLinhaCard(TFT_eSPI& g, int16_t ox, int16_t oy, int16_t largura, int16_t altura,
+                       const char* texto, bool selecionado, bool seta) {
+  const uint8_t fonte = layout::uiFontSize(1);
+  const int16_t xCard = ox + UI_RECUO_BORDA_TOQUE;
+  const int16_t yCard = oy + UI_RECUO_BORDA_TOQUE;
+  const int16_t larguraCard = largura - 2 * UI_RECUO_BORDA_TOQUE;
+  const int16_t alturaCard = altura - 2 * UI_RECUO_BORDA_TOQUE;
+  const uint16_t corCard = selecionado ? COR_SELECIONADO : UI_COR_CARTAO;
+
+  // O card e menor que a linha: o que sobra em volta dele volta a ser
+  // fundo (senao ficaria o rastro do card anterior, que podia estar
+  // selecionado). Dentro do sprite isso nao aparece como camada.
+  g.fillRect(ox, oy, largura, altura, COR_FUNDO);
+  g.fillRoundRect(xCard, yCard, larguraCard, alturaCard, UI_RAIO_CARTAO, corCard);
+  g.drawRoundRect(xCard, yCard, larguraCard, alturaCard, UI_RAIO_CARTAO,
+                  selecionado ? UI_COR_PRIMARIA : UI_COR_BORDA_TOQUE);
+
+  const int16_t xTexto = xCard + layout::uiMargin();
+  const int16_t larguraSeta = seta ? 12 * fonte : 0;
+  const int16_t larguraTexto = ox + largura - xTexto - UI_RECUO_BORDA_TOQUE - larguraSeta;
+  char buffer[40];
+  truncarTexto(buffer, sizeof(buffer), texto, larguraTexto, fonte);
+
+  // Centraliza o texto na altura da linha: a linha e bem mais alta que o
+  // texto (piso de toque, UI_ALTURA_MINIMA_ALVO_TOQUE).
+  const int16_t yTexto = oy + (altura - 8 * fonte) / 2;
+  g.setTextSize(fonte);
+  g.setTextColor(selecionado ? COR_TEXTO_SELECIONADO : COR_TEXTO, corCard);
+  imprimirTexto(g, xTexto, yTexto, buffer);
+
+  if (seta) {
+    g.setTextColor(selecionado ? COR_TEXTO_SELECIONADO : UI_COR_TEXTO_SECUNDARIO, corCard);
+    imprimirTexto(g, ox + largura - UI_RECUO_BORDA_TOQUE - layout::uiMargin() - 6 * fonte, yTexto,
+                  ">");
+  }
+}
+
+// Linha de lista (card) na posicao "linhaTela" da tela, so se mudou.
+void desenharLinhaLista(uint8_t linhaTela, int16_t y, int16_t largura, int16_t altura,
+                        const char* texto, bool selecionado, bool seta) {
+  const uint32_t assinatura = Assinatura()
+                                  .num(1)
+                                  .num(y)
+                                  .num(largura)
+                                  .num(altura)
+                                  .texto(texto)
+                                  .num(selecionado)
+                                  .num(seta)
+                                  .valor();
+  if (!slotMudou(SLOT_PRIMEIRO_ITEM + linhaTela, assinatura)) return;
+  desenharEmFaixa(0, y, largura, altura, [&](TFT_eSPI& g, int16_t ox, int16_t oy) {
+    desenharLinhaCard(g, ox, oy, largura, altura, texto, selecionado, seta);
+  });
+}
+
+// Linha de texto simples (sem card), centralizada na altura, na posicao
+// "slot" do cache, so se mudou.
+void desenharLinhaTexto(uint8_t slot, int16_t y, int16_t largura, int16_t altura,
+                        const char* texto, uint16_t corTexto) {
+  const uint32_t assinatura =
+      Assinatura().num(2).num(y).num(largura).num(altura).texto(texto).num(corTexto).valor();
+  if (!slotMudou(slot, assinatura)) return;
+
+  const uint8_t fonte = layout::uiFontSize(1);
+  char buffer[48];
+  truncarTexto(buffer, sizeof(buffer), texto, largura - 2 * layout::uiMargin(), fonte);
+  desenharEmFaixa(0, y, largura, altura, [&](TFT_eSPI& g, int16_t ox, int16_t oy) {
+    g.fillRect(ox, oy, largura, altura, COR_FUNDO);
+    g.setTextSize(fonte);
+    g.setTextColor(corTexto, COR_FUNDO);
+    imprimirTexto(g, ox + layout::uiMargin(), oy + (altura - 8 * fonte) / 2, buffer);
+  });
+}
+
+// Geometria das listas: quantas linhas cabem entre o cabecalho e o fim da
+// area de conteudo, e onde a primeira comeca.
+//
+// A sobra da divisao (a area raramente e multiplo exato da altura da
+// linha) e dividida entre cima e baixo. A versao anterior somava uma margem
+// fixa ao topo SEM descontar essa margem do numero de linhas: a ultima
+// linha passava 9px por baixo da barra de botoes, e a area de toque dela
+// "roubava" o toque da parte de cima dos botoes.
+struct GeometriaLista {
+  int16_t yInicial;
+  int16_t alturaLinha;
+  uint8_t linhas;
+};
+
+GeometriaLista geometriaLista(bool comDica) {
+  GeometriaLista geo;
+  geo.alturaLinha = layout::uiLineSpacing();
+  const int16_t yTopo = layout::uiHeaderHeight();
+  const int16_t area = yFimConteudo(comDica) - yTopo;
+  int16_t linhas = (geo.alturaLinha > 0) ? area / geo.alturaLinha : 1;
+  if (linhas < 1) linhas = 1;
+  geo.linhas = static_cast<uint8_t>(linhas);
+  const int16_t sobra = area - linhas * geo.alturaLinha;
+  geo.yInicial = yTopo + (sobra > 0 ? sobra / 2 : 0);
+  return geo;
+}
+
+// Barra de rolagem na coluna da direita, cobrindo a altura das linhas da
+// lista. So indica posicao (nao e tocavel): rolar continua sendo arrastar a
+// lista ou usar os botoes ^ v. Cada regiao da coluna e pintada uma unica
+// vez, sem sobreposicao — o polegar anda sem piscar mesmo sem sprite.
+void desenharBarraRolagem(int16_t yTopo, int16_t altura, uint8_t total, uint8_t visiveis,
+                          uint8_t offset) {
+  const uint32_t assinatura =
+      Assinatura().num(5).num(yTopo).num(altura).num(total).num(visiveis).num(offset).valor();
+  if (!slotMudou(SLOT_BARRA_ROLAGEM, assinatura)) return;
+
+  const int16_t larguraTela = tft.width();
+  const int16_t xColuna = larguraTela - UI_LARGURA_COLUNA_ROLAGEM;
+  const int16_t xBarra = larguraTela - UI_RECUO_BORDA_TOQUE - UI_LARGURA_BARRA_ROLAGEM;
+  const int16_t xFimBarra = xBarra + UI_LARGURA_BARRA_ROLAGEM;
+  const int16_t yTrilho = yTopo + UI_RECUO_BORDA_TOQUE;
+  const int16_t alturaTrilho = altura - 2 * UI_RECUO_BORDA_TOQUE;
+  if (alturaTrilho <= 0) return;
+
+  // Polegar proporcional a fracao visivel, com um minimo para continuar
+  // visivel em listas longas.
+  int16_t alturaPolegar = static_cast<int16_t>(
+      (static_cast<int32_t>(alturaTrilho) * visiveis) / (total > 0 ? total : 1));
+  if (alturaPolegar < 12) alturaPolegar = 12;
+  if (alturaPolegar > alturaTrilho) alturaPolegar = alturaTrilho;
+  const uint8_t offsetMaximo = (total > visiveis) ? static_cast<uint8_t>(total - visiveis) : 0;
+  const uint8_t offsetPreso = (offset > offsetMaximo) ? offsetMaximo : offset;
+  const int16_t yPolegar =
+      yTrilho + ((offsetMaximo > 0)
+                     ? static_cast<int16_t>((static_cast<int32_t>(alturaTrilho - alturaPolegar) *
+                                             offsetPreso) / offsetMaximo)
+                     : 0);
+
+  tft.fillRect(xColuna, yTopo, xBarra - xColuna, altura, COR_FUNDO);
+  if (larguraTela > xFimBarra) {
+    tft.fillRect(xFimBarra, yTopo, larguraTela - xFimBarra, altura, COR_FUNDO);
+  }
+  tft.fillRect(xBarra, yTopo, UI_LARGURA_BARRA_ROLAGEM, yTrilho - yTopo, COR_FUNDO);
+  tft.fillRect(xBarra, yTrilho, UI_LARGURA_BARRA_ROLAGEM, yPolegar - yTrilho,
+               UI_COR_TRILHO_ROLAGEM);
+  tft.fillRect(xBarra, yPolegar, UI_LARGURA_BARRA_ROLAGEM, alturaPolegar, UI_COR_POLEGAR_ROLAGEM);
+  tft.fillRect(xBarra, yPolegar + alturaPolegar, UI_LARGURA_BARRA_ROLAGEM,
+               yTrilho + alturaTrilho - (yPolegar + alturaPolegar), UI_COR_TRILHO_ROLAGEM);
+  tft.fillRect(xBarra, yTrilho + alturaTrilho, UI_LARGURA_BARRA_ROLAGEM,
+               yTopo + altura - (yTrilho + alturaTrilho), COR_FUNDO);
+}
+
+// Um botao (rodape ou cabecalho) ocupando a celula inteira em (ox, oy). OK
+// usa o estilo FilledButton do app — e a acao primaria da tela; os demais,
+// OutlinedButton. Pressionado, qualquer um acende na cor primaria.
+void desenharBotao(TFT_eSPI& g, int16_t ox, int16_t oy, int16_t w, int16_t h, const char* rotulo,
+                   bool primario, bool pressionado) {
+  const uint8_t fonte = layout::uiFontSize(1);
+  const uint16_t corBotao =
+      pressionado ? UI_COR_BOTAO_PRESSIONADO : (primario ? UI_COR_PRIMARIA : UI_COR_BOTAO);
+  const bool corClara = pressionado || primario;
+
+  // O fundo da celula tambem e o separador entre botoes vizinhos: sem ele a
+  // barra vira um bloco so e nao da para ver onde um termina e o outro
+  // comeca (importante quando o dedo cobre metade da barra).
+  g.fillRect(ox, oy, w, h, COR_FUNDO);
+  g.fillRoundRect(ox + 2, oy + 2, w - 5, h - 5, UI_RAIO_BOTAO, corBotao);
+  g.drawRoundRect(ox + 2, oy + 2, w - 5, h - 5, UI_RAIO_BOTAO,
+                  corClara ? UI_COR_PRIMARIA : UI_COR_BORDA_TOQUE);
+
+  const int16_t larguraTexto = static_cast<int16_t>(std::strlen(rotulo) * 6 * fonte);
+  g.setTextSize(fonte);
+  g.setTextColor(corClara ? UI_COR_SOBRE_PRIMARIA : UI_COR_TEXTO_BOTAO, corBotao);
+  imprimirTexto(g, ox + (w - larguraTexto) / 2, oy + (h - 8 * fonte) / 2, rotulo);
+}
+
+// ---------------------------------------------------------------------
+// Barra de botões do rodapé
+// ---------------------------------------------------------------------
+// Quatro botões de largura igual, sempre nesta ordem e sempre no mesmo
+// lugar em todas as telas: Voltar | cima | baixo | OK. Os rótulos do meio
+// mudam para "-" e "+" nas telas de valor editável, mas a AÇÃO é a mesma
+// (Anterior/Proximo) — a posição nunca muda, para o usuário não ter que
+// reprocurar o botão a cada tela.
+struct RotulosRodape {
+  const char* voltar = "<";
+  const char* anterior = "^";
+  const char* proximo = "v";
+  const char* confirmar = "OK";
+  // Ações dos dois botões do meio. Só a tela de gráfico as troca (para
+  // zoom); em todas as outras eles navegam. A POSIÇÃO nunca muda — é o que
+  // permite acertar o botão sem reler a tela a cada troca.
+  AcaoToque acaoAnterior = AcaoToque::Anterior;
+  AcaoToque acaoProximo = AcaoToque::Proximo;
+};
+
+void desenharBotoesRodape(const RotulosRodape& rotulos, bool mostrarVoltar = true) {
+  const int16_t alturaRodape = layout::uiFooterHeight();
+  const int16_t y = tft.height() - alturaRodape;
+  const int16_t larguraBotao = tft.width() / 4;
+  const AcaoToque acoes[4] = {AcaoToque::Voltar, rotulos.acaoAnterior, rotulos.acaoProximo,
+                              AcaoToque::Confirmar};
+  const char* textos[4] = {rotulos.voltar, rotulos.anterior, rotulos.proximo, rotulos.confirmar};
+
+  for (uint8_t i = 0; i < 4; i++) {
+    const int16_t x = i * larguraBotao;
+    const bool visivel = (i != 0 || mostrarVoltar);
+    const bool primario = (i == 3);
+    const char* texto = textos[i];
+
+    const uint32_t assinatura = Assinatura()
+                                    .num(3)
+                                    .num(x)
+                                    .num(y)
+                                    .num(larguraBotao)
+                                    .num(alturaRodape)
+                                    .texto(texto)
+                                    .num(visivel)
+                                    .valor();
+    if (slotMudou(SLOT_BOTAO_RODAPE + i, assinatura)) {
+      desenharEmFaixa(x, y, larguraBotao, alturaRodape, [&](TFT_eSPI& g, int16_t ox, int16_t oy) {
+        if (visivel) {
+          desenharBotao(g, ox, oy, larguraBotao, alturaRodape, texto, primario, false);
+        } else {
+          g.fillRect(ox, oy, larguraBotao, alturaRodape, COR_FUNDO);
+        }
+      });
+    }
+
+    // Registrada mesmo quando o desenho foi pulado: as zonas sao zeradas a
+    // cada tela, o desenho nao.
+    if (visivel) registrarZona(x, y, larguraBotao, alturaRodape, acoes[i], 0, texto);
+  }
+}
+
+// Realimentação visual do botão pressionado: repinta só aquele botão na cor
+// de pressionado. Sem isso o usuário não tem como saber se o toque pegou —
+// o dedo cobre justamente o botão que ele está tocando.
+void pintarZonaPressionada(const ZonaToque& z, bool pressionada) {
+  if (z.acao == AcaoToque::ItemLista || z.acao == AcaoToque::Nenhuma) return;
+
+  desenharEmFaixa(z.x, z.y, z.w, z.h, [&](TFT_eSPI& g, int16_t ox, int16_t oy) {
+    desenharBotao(g, ox, oy, z.w, z.h, z.rotulo, z.acao == AcaoToque::Confirmar, pressionada);
+  });
+  // O botao foi pintado por fora do cache. Ao soltar ele volta ao normal,
+  // mas a tela pode ter mudado enquanto o dedo estava em cima
+  // (zonaPressionada e uma COPIA da zona antiga): o proximo redesenho refaz
+  // cabecalho e rodape, garantindo que o que esta ali e o da tela atual.
+  if (!pressionada) invalidarSlots(SLOT_CABECALHO, SLOT_BOTAO_RODAPE + 3);
+}
+
+// Move o cursor ate o item tocado, sem ativar nada.
+//
+// MODELO DE INTERACAO: pressionar move, soltar aciona.
+//   - ao encostar o dedo num item, o cursor pula para ele na hora (esta
+//     funcao) — o usuario ve o destaque sob o proprio dedo;
+//   - ao soltar sobre o mesmo item, ele e confirmado;
+//   - ao arrastar para fora antes de soltar, nada e acionado, e o cursor
+//     fica onde parou.
+//
+// Substituiu a selecao em dois toques da versao anterior. Ela protegia
+// contra erro de mira, mas ao custo de um toque a mais em CADA escolha; o
+// modelo atual da a mesma protecao de graca, porque o destaque aparece
+// enquanto o dedo ainda esta na tela e ha tempo de arrastar para fora se o
+// alvo estiver errado. E e o comportamento que qualquer interface de toque
+// tem, entao nao precisa ser aprendido.
+//
+// A traducao para o vocabulario da maquina de estados continua a mesma:
+// uma rajada de Proximo/Anterior, drenada inteira no mesmo tick (ver o laco
+// em maquina_estados::tick()), o que faz o cursor SALTAR para o item em vez
+// de andar item por item.
+void enfileirarMoverParaItem(uint8_t destino) {
+  if (destino == indiceSelecionadoAtual) return;
+
+  if (destino > indiceSelecionadoAtual) {
+    for (uint8_t i = indiceSelecionadoAtual; i < destino; i++) enfileirar(EventoFila::Proximo);
+  } else {
+    for (uint8_t i = destino; i < indiceSelecionadoAtual; i++) enfileirar(EventoFila::Anterior);
+  }
+}
+
+// Leitura crua do XPT2046 com mediana de 3 amostras. Mediana em vez de
+// média: filtra o pico isolado (ruído do touch resistivo) sem introduzir o
+// atraso que uma média móvel introduziria.
+uint16_t mediana3(uint16_t a, uint16_t b, uint16_t c) {
+  if (a > b) { const uint16_t t = a; a = b; b = t; }
+  if (b > c) { const uint16_t t = b; b = c; c = t; }
+  if (a > b) { const uint16_t t = a; a = b; b = t; }
+  return b;
+}
+
+bool lerToqueBruto(int16_t& x, int16_t& y) {
+  const uint16_t limiar = tocando ? Z_SOLTA : Z_TOQUE;
+  if (tft.getTouchRawZ() < limiar) return false;
+
+  uint16_t rx[3], ry[3];
+  for (uint8_t i = 0; i < 3; i++) tft.getTouchRaw(&rx[i], &ry[i]);
+
+  // A reconferencia de pressao (que descarta a borda de soltura, onde o
+  // XPT2046 devolve coordenada lixo) so e feita na DESCIDA do dedo. Durante
+  // o arrasto ela custava uma transacao SPI a cada leitura sem ganho: se o
+  // dedo ja esta na tela, uma amostra ruim isolada e absorvida pela mediana,
+  // e um ponto errado no meio de um arrasto nao aciona nada.
+  if (!tocando && tft.getTouchRawZ() < limiar) return false;
+
+  uint16_t px = mediana3(rx[0], rx[1], rx[2]);
+  uint16_t py = mediana3(ry[0], ry[1], ry[2]);
+  tft.convertRawXY(&px, &py);
+
+  x = static_cast<int16_t>(px);
+  y = static_cast<int16_t>(py);
+  return true;
+}
+
+
+// Le o XPT2046 CRU por alguns segundos e imprime. Roda ANTES da calibracao
+// de proposito: se o controlador nao responde, tft.calibrateTouch() pode
+// concluir com valores de lixo e gravar uma calibracao invalida, deixando
+// toqueOk em true com o toque morto — o diagnostico ficaria escondido atras
+// do proprio defeito.
+//
+// Como ler a saida:
+//   z sempre 0            -> o controlador nao responde. Verifique as tres
+//                            pontes (pinos 10, 12 e 13 unidos aos 7, 6 e 9)
+//                            e o T_CS. O display funcionar NAO descarta
+//                            isso: escrever na tela nao usa o MISO nem o
+//                            T_CS, e o toque precisa dos dois.
+//   z sempre no maximo    -> linha presa; MISO em curto ou sem pull.
+//   z varia ao tocar      -> o controlador esta bom, o problema e a
+//                            calibracao ou o mapeamento das coordenadas.
+bool diagnosticarToque() {
+  constexpr uint32_t DURACAO_MS = 4000;
+  Serial.println("[TOUCH][DIAG] Leitura crua por 4s — TOQUE NA TELA AGORA");
+  Serial.println("[TOUCH][DIAG]   z=0 sempre -> controlador mudo (pontes/T_CS)");
+  Serial.flush();
+
+  uint16_t zMin = 0xFFFF, zMax = 0;
+  const uint32_t inicio = millis();
+  while (millis() - inicio < DURACAO_MS) {
+    uint16_t x = 0, y = 0;
+    const uint16_t z = tft.getTouchRawZ();
+    tft.getTouchRaw(&x, &y);
+    if (z < zMin) zMin = z;
+    if (z > zMax) zMax = z;
+    Serial.printf("[TOUCH][DIAG] z=%5u  x=%5u  y=%5u\n", z, x, y);
+    Serial.flush();
+    delay(200);
+  }
+
+  const bool respondeu = (zMax != zMin);
+  Serial.printf("[TOUCH][DIAG] z variou de %u a %u -> %s\n", zMin, zMax,
+                respondeu ? "variou: controlador respondendo"
+                               : "SEM VARIACAO: controlador nao respondeu");
+  Serial.flush();
+  return respondeu;
+}
+
 }  // namespace
+
+// Definida bem abaixo, junto das demais primitivas de desenho, mas
+// declarada aqui porque atualizarToque() a chama: os gestos de zoom e
+// arrasto redesenham o grafico sem passar pela maquina de estados.
+void desenharGraficoInterno();
 
 void init() {
   Serial.println("[DISPLAY] Inicializacao iniciada");
-  Serial.printf("[DISPLAY] TFT_CS: %d\n", TFT_CS);
-  Serial.printf("[DISPLAY] TFT_DC: %d\n", TFT_DC);
-  Serial.printf("[DISPLAY] TFT_RST: %d\n", TFT_RST);
-  Serial.printf("[DISPLAY] TFT_BL: %d\n", TFT_BL);
-  Serial.printf("[DISPLAY] TFT_SCLK: %d\n", TFT_SCLK);
-  Serial.printf("[DISPLAY] TFT_MOSI: %d\n", TFT_MOSI);
-  Serial.printf("[DISPLAY] TFT_MISO: %d\n", TFT_MISO);
-  Serial.printf("[DISPLAY] Objeto bus: %p\n", static_cast<void*>(bus));
-  Serial.printf("[DISPLAY] Objeto na inicializacao: %p\n", static_cast<void*>(display));
+  Serial.printf("[DISPLAY] TFT_CS: %d | TFT_DC: %d | TFT_RST: %d | TFT_BL: %d\n", TFT_CS, TFT_DC,
+                TFT_RST, TFT_BL);
+  Serial.printf("[DISPLAY] TFT_SCLK: %d | TFT_MOSI: %d | TFT_MISO: %d | TOUCH_CS: %d\n", TFT_SCLK,
+                TFT_MOSI, TFT_MISO, TOUCH_CS);
 
-  pinMode(ENC_S1_PIN, INPUT_PULLUP);
-  pinMode(ENC_S2_PIN, INPUT_PULLUP);
-  pinMode(ENC_KEY_PIN, INPUT_PULLUP);
+  Serial.println("[IHM] 1/7 buzzer"); Serial.flush();
   pinMode(BUZZER_PIN, OUTPUT);
+  // Tira o tone() do canal LEDC 0 (padrão dele) antes de qualquer beep —
+  // ver o comentário em BRILHO_PWM_CANAL. Sem isto, o primeiro beep rouba
+  // o canal do backlight e a tela apaga.
+  setToneChannel(BUZZER_PWM_CANAL);
 
-  // Backlight ligado antes de display->begin(): confirma que o circuito do
-  // backlight funciona mesmo que o controlador ST7735 não responda no SPI.
+  // Backlight ligado antes do init do painel: confirma que o circuito do
+  // backlight funciona mesmo que o controlador não responda no SPI.
   pinMode(TFT_BL, OUTPUT);
   digitalWrite(TFT_BL, HIGH);
-  Serial.printf("[DISPLAY] Backlight configurado (pino %d em HIGH). Estado GPIO: %d\n", TFT_BL,
-                digitalRead(TFT_BL));
+  Serial.printf("[DISPLAY] Backlight configurado (pino %d em HIGH)\n", TFT_BL);
 
-  Serial.println("[DISPLAY] Executando display->begin()");
-  displayOk = display->begin();
-  Serial.printf("[DISPLAY] Resultado de begin(): %s\n", displayOk ? "SUCESSO" : "FALHA");
+  // DESSELECIONA O CARTÃO ANTES DE FALAR COM A TELA.
+  //
+  // O SD compartilha SCK/MOSI/MISO com o display, e quem cuida do CS dele é
+  // o SD.begin() — que só roda bem depois, em armazenamento::init(). Até
+  // lá, SD_CS_PIN é uma entrada flutuante: se ela estiver em nível baixo
+  // durante o tft.init(), o cartão se considera selecionado e interpreta
+  // toda a sequência de inicialização do display como comandos SPI
+  // endereçados a ele. O resultado é um cartão em estado inconsistente, que
+  // depois recusa o SD.begin() — a falha aparece no SD, mas a causa está
+  // aqui.
+  //
+  // O TOUCH_CS não precisa do mesmo cuidado: o próprio tft.init() o coloca
+  // em HIGH (TFT_eSPI.cpp, linhas 543-546).
+  pinMode(SD_CS_PIN, OUTPUT);
+  digitalWrite(SD_CS_PIN, HIGH);
+  Serial.printf("[DISPLAY] SD desselecionado (pino %d em HIGH) antes de iniciar o painel\n",
+                SD_CS_PIN);
 
-  if (!displayOk) {
-    // Sem while(true)/return: registra a falha e deixa o restante do
-    // firmware (encoder, LEDs, sensores, Bluetooth, SD) continuar normalmente.
-    // Todas as funções de desenho abaixo checam displayOk antes de tocar
-    // no ponteiro do display.
-    Serial.println("[ERRO][DISPLAY] Inicializacao falhou - display marcado como indisponivel");
-    Serial.println("[DISPLAY] Demais modulos do firmware continuarao normalmente");
+  Serial.println("[IHM] 2/7 tft.init()"); Serial.flush();
+  tft.init();
+  tft.setRotation(ROTACAO_DISPLAY);
+  Serial.println("[IHM] 3/7 painel iniciado"); Serial.flush();
+
+  // O ID do controlador é lido só para DIAGNÓSTICO, e nunca para decidir se
+  // a tela existe.
+  //
+  // O TFT_eSPI não tem um begin() com retorno de sucesso como o
+  // Arduino_GFX tinha, e a leitura de registrador não serve de substituto:
+  // muitos destes painéis simplesmente não respondem ao 0xD3 (ou têm o SDO
+  // sem tri-state, ou compartilham o MISO com o touch/SD), e devolvem
+  // 00/FF mesmo funcionando perfeitamente para escrita. Condicionar
+  // displayOk a essa leitura desligava a IHM inteira — incluindo a
+  // calibração do toque — num painel são, deixando a tela com o lixo de
+  // RAM que ela mostra ao ligar. Escrita e leitura são caminhos
+  // independentes aqui; a falha de uma não prova nada sobre a outra.
+  const uint8_t id1 = tft.readcommand8(0xD3, 1);
+  const uint8_t id2 = tft.readcommand8(0xD3, 2);
+  const uint8_t id3 = tft.readcommand8(0xD3, 3);
+  Serial.printf("[DISPLAY] ID do controlador (0xD3): %02X %02X %02X\n", id1, id2, id3);
+  Serial.println("[DISPLAY]   93 41 -> ILI9341 240x320 | 93 42 -> ILI9342 320x240");
+  Serial.println("[DISPLAY]   94 88 -> ILI9488 320x480 | 00/FF -> sem resposta de leitura");
+  Serial.println("[DISPLAY]   (so diagnostico: o driver em uso vem do platformio.ini)");
+
+  displayOk = true;
+  Serial.printf("[DISPLAY] Resolucao configurada: %d x %d (rotacao %d)\n", tft.width(),
+                tft.height(), ROTACAO_DISPLAY);
+  tft.fillScreen(COR_FUNDO);
+  layout::init(tft.width(), tft.height());
+
+  // Buffer das faixas (ver spriteFaixa). Sem memoria o firmware segue
+  // desenhando direto no painel — funciona igual, so volta a piscar.
+  spriteFaixa.setColorDepth(16);
+  spriteFaixaOk = spriteFaixa.createSprite(tft.width(), ALTURA_SPRITE_FAIXA) != nullptr;
+  Serial.printf("[IHM] Buffer de faixa %dx%d: %s\n", tft.width(), ALTURA_SPRITE_FAIXA,
+                spriteFaixaOk ? "OK" : "SEM MEMORIA (desenho direto)");
+
+  // Teste visual rápido, herdado da ideia do "teste visual integrado" da
+  // main: três faixas de cor por meio segundo. Se elas aparecerem, o
+  // caminho de ESCRITA (SPI, CS, DC, RST e backlight) está inteiro, e
+  // qualquer problema seguinte é de geometria/driver, não de fiação.
+  const int16_t faixa = tft.height() / 3;
+  tft.fillRect(0, 0, tft.width(), faixa, cor(0xFF0000));
+  tft.fillRect(0, faixa, tft.width(), faixa, cor(0x00FF00));
+  tft.fillRect(0, 2 * faixa, tft.width(), tft.height() - 2 * faixa, cor(0x0000FF));
+  delay(500);
+  tft.fillScreen(COR_FUNDO);
+
+  Serial.println("[IHM] 4/7 lendo calibracao do toque na NVS"); Serial.flush();
+  const bool toqueResponde = diagnosticarToque();
+
+  // ---- Calibração do touch ----
+  prefsToque.begin("ihm", true);
+  const uint32_t assinaturaSalva = prefsToque.getULong("sigtoque", 0);
+  bool temCalibracao = false;
+  if (assinaturaSalva == assinaturaCalibracao() &&
+      prefsToque.getBytesLength("caltoque") == sizeof(calData)) {
+    prefsToque.getBytes("caltoque", calData, sizeof(calData));
+    temCalibracao = (calData[1] != 0 && calData[3] != 0);
+  }
+  prefsToque.end();
+
+  if (temCalibracao) {
+    tft.setTouch(calData);
+    toqueOk = true;
+    Serial.printf("[TOUCH] Calibracao carregada da NVS: {%u, %u, %u, %u, %u}\n", calData[0],
+                  calData[1], calData[2], calData[3], calData[4]);
+  } else if (!toqueResponde) {
+    // Sem resposta do controlador, calibrar seria pior que nao calibrar:
+    // tft.calibrateTouch() espera um toque que nunca chega (trava o boot) ou
+    // conclui com lixo e GRAVA essa calibracao invalida na NVS, que passa a
+    // ser carregada nos boots seguintes escondendo o defeito.
+    Serial.println("[TOUCH] Controlador mudo — calibracao NAO executada.");
+    Serial.println("[TOUCH] Verifique o T_CS e as pontes dos pinos 10, 12 e 13");
+    Serial.println("[TOUCH] (unir aos pinos 7, 6 e 9).");
   } else {
-    Serial.printf("[DISPLAY] Resolucao detectada: %d x %d\n", display->width(), display->height());
-    Serial.printf("[DISPLAY] Heap apos inicializacao: %u bytes\n",
-                  static_cast<unsigned>(ESP.getFreeHeap()));
-
-    display->fillScreen(COR_FUNDO);
-    display->flush();
-    layout::init(display->width(), display->height());
+    Serial.println("[TOUCH] Sem calibracao valida para esta geometria - calibrando agora");
+    calibrarToque();
   }
 
+  if (!toqueResponde) {
+    // Vale inclusive quando ha calibracao salva na NVS: manter toqueOk em
+    // true faria a IHM se comportar como se o toque estivesse vivo.
+    // O controle pelo aplicativo Bluetooth continua inteiro.
+    toqueOk = false;
+    Serial.println("[TOUCH] Toque desabilitado nesta sessao (hardware mudo).");
+  }
+
+  Serial.println("[IHM] 5/7 PWM do backlight"); Serial.flush();
   if (FORCE_DISPLAY_BACKLIGHT_DIAGNOSTIC) {
     // NÃO anexa o pino ao LEDC: ledcAttachPin() assume o controle do
     // estágio de saída do GPIO e zera o duty até o primeiro ledcWrite(),
     // o que apagaria o backlight mesmo depois do digitalWrite(HIGH) acima.
-    // Aqui o pino continua um GPIO simples, já em HIGH.
     Serial.println("[DISPLAY] Diagnostico: backlight em modo GPIO puro (LEDC nao anexado)");
   } else {
     ledcSetup(BRILHO_PWM_CANAL, BRILHO_PWM_FREQ_HZ, BRILHO_PWM_RESOLUCAO_BITS);
@@ -310,43 +1140,269 @@ void init() {
   }
   setBrilho(BRILHO_NIVEL_MAXIMO);
 
-  Serial.println("[LEDS] Inicializando NeoPixel");
-  Serial.printf("[LEDS] GPIO: %d\n", PIN_NEO);
-  Serial.printf("[LEDS] Quantidade: %d\n", NUM_LEDS);
-  Serial.printf("[LEDS] Brilho de teste: %u\n", static_cast<unsigned>(LED_STARTUP_BRIGHTNESS));
-
+  Serial.printf("[LEDS] Inicializando NeoPixel (GPIO %d, %d LEDs)\n", PIN_NEO, NUM_LEDS);
+  Serial.println("[IHM] 6/7 NeoPixel"); Serial.flush();
   pixels.begin();
   pixels.clear();
   pixels.show();
 
-  Serial.println("[LEDS] NeoPixel inicializado");
-  Serial.println("[DISPLAY] Inicializacao concluida");
+  Serial.println("[IHM] 7/7 concluido"); Serial.flush();
 }
 
 bool displayDisponivel() { return displayOk; }
+bool toqueDisponivel() { return toqueOk; }
 
-int readEncoder(int maxPosition) {
-  const int currentA = digitalRead(ENC_S1_PIN);
-  const int currentB = digitalRead(ENC_S2_PIN);
+void calibrarToque() {
+  if (!displayOk) return;
+  TravaBarramentoDisplay travaBus;
 
-  if (currentA != encoder.lastA) {
-    if (encoder.lastA == HIGH && currentA == LOW) {
-      if (currentB == HIGH) {
-        encoder.position++;
-      } else {
-        encoder.position--;
-      }
+  tft.fillScreen(COR_FUNDO);
+  tft.setTextSize(layout::uiFontSize(1));
+  tft.setTextColor(COR_TEXTO);
+  imprimirTexto(layout::uiMargin(), layout::uiCenterY() - 20, "Calibracao do toque");
+  imprimirTexto(layout::uiMargin(), layout::uiCenterY(), "Toque na seta de cada canto");
 
-      if (maxPosition >= 0) {
-        if (encoder.position > maxPosition) encoder.position = 0;
-        if (encoder.position < 0) encoder.position = maxPosition;
-      }
-    }
-    encoder.lastA = currentA;
+  invalidarCacheTela();
+  tft.calibrateTouch(calData, COR_TEXTO, COR_FUNDO, 15);
+  tft.setTouch(calData);
+  toqueOk = true;
+
+  prefsToque.begin("ihm", false);
+  prefsToque.putBytes("caltoque", calData, sizeof(calData));
+  prefsToque.putULong("sigtoque", assinaturaCalibracao());
+  prefsToque.end();
+
+  Serial.printf("[TOUCH] Calibracao salva na NVS: {%u, %u, %u, %u, %u}\n", calData[0], calData[1],
+                calData[2], calData[3], calData[4]);
+
+  tft.fillScreen(COR_FUNDO);
+}
+
+// ---------------------------------------------------------------------
+// Entrada
+// ---------------------------------------------------------------------
+
+void atualizarToque() {
+  if (!displayOk || !toqueOk) return;
+
+  int16_t x = 0, y = 0;
+  bool agora = false;
+  {
+    // O XPT2046 está no MESMO barramento SPI do display e do cartão, e esta
+    // função é chamada do núcleo 1 enquanto a tarefa de armazenamento grava
+    // no cartão a partir do núcleo 0. Sem a trava, uma leitura de toque
+    // pode cair no meio de uma transferência do SD — e o resultado não é
+    // uma coordenada errada, é o dado do cartão corrompido.
+    TravaBarramentoDisplay travaBus;
+    agora = lerToqueBruto(x, y);
+  }
+  const uint32_t ms = millis();
+
+  if (agora) {
+    penultimoXValido = tocando ? ultimoXValido : x;
+    penultimoYValido = tocando ? ultimoYValido : y;
+    ultimoXValido = x;
+    ultimoYValido = y;
   }
 
-  return encoder.position;
+  if (agora && !tocando) {
+    // ---- Borda de descida: dedo encostou ----
+    tocando = true;
+    xInicialToque = x;
+    yInicialToque = y;
+    xReferenciaArrasto = x;
+    yReferenciaArrasto = y;
+    virouGesto = false;
+    leiturasForaDoLimiar = 0;
+
+    // Debounce: ignora um segundo toque logo depois do anterior. O repique
+    // do touch resistivo chega a gerar dois toques de um encostar só, o que
+    // faria a máquina de estados avançar duas telas de uma vez.
+    if (ms - ultimoToqueAceitoMs < DEBOUNCE_TOQUE_MS) return;
+
+    for (uint8_t i = 0; i < quantidadeZonas; i++) {
+      if (!zonas[i].contem(x, y)) continue;
+      zonaPressionada = zonas[i];
+      temZonaPressionada = true;
+      beep(BEEP_TOQUE_MS);
+
+      // Item de lista: o cursor vai para ele JA na descida do dedo, para o
+      // destaque aparecer sob o dedo enquanto ele ainda esta na tela. A
+      // ativacao so acontece ao soltar.
+      if (zonaPressionada.acao == AcaoToque::ItemLista) {
+        enfileirarMoverParaItem(zonaPressionada.indice);
+      } else {
+        // Botoes do rodape nao movem cursor: so acendem, e agem ao soltar.
+        TravaBarramentoDisplay travaBus;
+        pintarZonaPressionada(zonaPressionada, true);
+      }
+      break;
+    }
+  } else if (agora && tocando) {
+    // ---- Dedo arrastando ----
+    const int16_t dx = x - xInicialToque;
+    const int16_t dy = y - yInicialToque;
+
+    const bool foraDoLimiar = abs(dx) > LIMIAR_GESTO_PX || abs(dy) > LIMIAR_GESTO_PX;
+    leiturasForaDoLimiar = foraDoLimiar ? static_cast<uint8_t>(leiturasForaDoLimiar + 1) : 0;
+    if (!virouGesto && leiturasForaDoLimiar >= LEITURAS_PARA_GESTO) {
+      virouGesto = true;
+      // Desfaz o destaque do botão: o toque virou gesto e não vai mais
+      // acionar aquela zona, então deixá-lo aceso seria mentira visual.
+      if (temZonaPressionada) {
+        TravaBarramentoDisplay travaBus;
+        pintarZonaPressionada(zonaPressionada, false);
+      }
+    }
+
+    if (virouGesto) {
+      if (graficoAtivo && abs(dx) > abs(dy)) {
+        // Arrasto lateral no gráfico: desloca a janela visível. Segue o
+        // dedo — arrastar para a esquerda anda para a frente no tempo.
+        const int16_t passo = x - xReferenciaArrasto;
+        if (passo != 0 && graficoZoom > 1.0f) {
+          graficoCentro -= static_cast<float>(passo) / static_cast<float>(tft.width()) / graficoZoom;
+          if (graficoCentro < 0.0f) graficoCentro = 0.0f;
+          if (graficoCentro > 1.0f) graficoCentro = 1.0f;
+          xReferenciaArrasto = x;
+          TravaBarramentoDisplay travaBus;
+          desenharGraficoInterno();
+        }
+      } else if (!graficoAtivo && quantidadeItensAtual > 0) {
+        // Arrasto vertical numa lista: cada linha percorrida move a
+        // seleção em um item. Como a rolagem acompanha a seleção
+        // (offsetRolagem), mover a seleção é o que faz a lista rolar.
+        const int16_t alturaLinha = layout::uiLineSpacing();
+        while (y - yReferenciaArrasto >= alturaLinha) {
+          enfileirar(EventoFila::Anterior);  // dedo para baixo = sobe na lista
+          yReferenciaArrasto += alturaLinha;
+        }
+        while (yReferenciaArrasto - y >= alturaLinha) {
+          enfileirar(EventoFila::Proximo);
+          yReferenciaArrasto -= alturaLinha;
+        }
+      }
+    }
+  } else if (!agora && tocando) {
+    // ---- Borda de subida: dedo saiu ----
+    // A ação acontece aqui, não na descida: assim o usuário pode arrastar o
+    // dedo para fora do botão e soltar sem acionar nada, que é o
+    // comportamento esperado de qualquer interface de toque.
+    tocando = false;
+
+    // Posicao de soltura = penultima leitura (ver penultimoXValido).
+    const int16_t xSoltura = penultimoXValido;
+    const int16_t ySoltura = penultimoYValido;
+    const int16_t dx = xSoltura - xInicialToque;
+    const int16_t dy = ySoltura - yInicialToque;
+
+    // Deslizar para a direita = voltar. Exige ser bem mais horizontal que
+    // vertical (2x) para não confundir com uma rolagem torta.
+    const bool deslizouParaVoltar =
+        virouGesto && dx > LIMIAR_DESLIZE_VOLTAR_PX && abs(dx) > 2 * abs(dy);
+
+    if (temZonaPressionada) {
+      if (zonaPressionada.acao != AcaoToque::ItemLista) {
+        TravaBarramentoDisplay travaBus;
+        pintarZonaPressionada(zonaPressionada, false);
+      }
+
+      // Só aciona se NÃO virou gesto e se o dedo estava dentro da mesma
+      // zona na última leitura válida — é isso que faz o "arrastar para
+      // fora para cancelar" funcionar, e o que impede uma rolagem de
+      // também selecionar o item de onde ela partiu.
+      //
+      // A conferencia de zona tem a mesma folga do limiar de gesto: sem
+      // ela, um toque na beirada de um alvo pequeno (tecla, botao) que
+      // escorregasse 2px para fora ao soltar nao acionava nada.
+      const bool soltouNaZona =
+          xSoltura >= zonaPressionada.x - LIMIAR_GESTO_PX &&
+          xSoltura < zonaPressionada.x + zonaPressionada.w + LIMIAR_GESTO_PX &&
+          ySoltura >= zonaPressionada.y - LIMIAR_GESTO_PX &&
+          ySoltura < zonaPressionada.y + zonaPressionada.h + LIMIAR_GESTO_PX;
+      if (!virouGesto && soltouNaZona) {
+        ultimoToqueAceitoMs = ms;
+        switch (zonaPressionada.acao) {
+          case AcaoToque::ItemLista:
+            // O cursor ja foi movido na descida; soltar sobre o item so
+            // confirma. Se a rajada de movimento ainda estiver na fila, o
+            // Confirmar entra depois dela e e consumido na ordem certa.
+            enfileirar(EventoFila::Confirmar);
+            break;
+          case AcaoToque::Confirmar:
+            enfileirar(EventoFila::Confirmar);
+            break;
+          case AcaoToque::Proximo:
+            enfileirar(EventoFila::Proximo);
+            break;
+          case AcaoToque::Anterior:
+            enfileirar(EventoFila::Anterior);
+            break;
+          case AcaoToque::Voltar:
+            voltarPendente = true;
+            break;
+          case AcaoToque::ZoomMais:
+          case AcaoToque::ZoomMenos: {
+            // Zoom não passa pela máquina de estados: é uma mudança de
+            // visualização, não de estado do firmware. A ihm redesenha o
+            // gráfico na hora, com os pontos que ela mesma copiou.
+            if (zonaPressionada.acao == AcaoToque::ZoomMais) {
+              graficoZoom *= 2.0f;
+              if (graficoZoom > GRAFICO_ZOOM_MAX) graficoZoom = GRAFICO_ZOOM_MAX;
+            } else {
+              graficoZoom /= 2.0f;
+              if (graficoZoom < 1.0f) graficoZoom = 1.0f;
+              if (graficoZoom == 1.0f) graficoCentro = 0.5f;
+            }
+            TravaBarramentoDisplay travaBus;
+            desenharGraficoInterno();
+            break;
+          }
+          case AcaoToque::Nenhuma:
+            break;
+        }
+      }
+      temZonaPressionada = false;
+    }
+
+    if (deslizouParaVoltar) {
+      ultimoToqueAceitoMs = ms;
+      voltarPendente = true;
+    }
+    virouGesto = false;
+    leiturasForaDoLimiar = 0;
+  }
 }
+
+EventoNavegacao lerEventoNavegacao() {
+  if (filaVazia()) return EventoNavegacao::Nenhum;
+
+  // Só retira da fila se o próximo evento for de navegação — Confirmar fica
+  // para confirmacaoSolicitada(), preservando a ordem original.
+  const EventoFila e = fila[filaInicio];
+  if (e == EventoFila::Confirmar) return EventoNavegacao::Nenhum;
+
+  filaInicio = static_cast<uint8_t>((filaInicio + 1) % TAM_FILA);
+  return (e == EventoFila::Proximo) ? EventoNavegacao::Proximo : EventoNavegacao::Anterior;
+}
+
+bool confirmacaoSolicitada() {
+  if (filaVazia()) return false;
+  if (fila[filaInicio] != EventoFila::Confirmar) return false;
+
+  filaInicio = static_cast<uint8_t>((filaInicio + 1) % TAM_FILA);
+  return true;
+}
+
+bool voltarSolicitado() {
+  if (!voltarPendente) return false;
+  voltarPendente = false;
+  return true;
+}
+
+// ---------------------------------------------------------------------
+// LEDs
+// ---------------------------------------------------------------------
 
 void controlarLED(uint16_t indice, uint8_t vermelho, uint8_t verde, uint8_t azul,
                   uint8_t brilho) {
@@ -427,16 +1483,25 @@ void atualizarIndicacoes() {
   }
 }
 
+// ---------------------------------------------------------------------
+// Telas simples
+// ---------------------------------------------------------------------
+
 void escreverTelaApp(const char* titulo, const char* valor, const char* rodape,
 					 bool forcarRedesenho) {
   if (!displayOk) return;
   TravaBarramentoDisplay travaBus;
 
   if (forcarRedesenho || !telaApp.inicializada) {
-    Serial.println("[IHM] Limpando tela em escreverTelaApp()");
-    display->fillScreen(COR_FUNDO);
-    display->fillRect(0, 0, display->width(), 28, COR_CABECALHO);
-    display->drawRect(0, 0, display->width(), display->height(), COR_CABECALHO);
+    // Esta tela não tem nada tocável (é a de "modo aplicativo": quem comanda
+    // é o app pelo BLE). Ainda assim precisa zerar as zonas: sem isso ela
+    // herdaria os alvos da tela anterior e um toque numa área visualmente
+    // vazia acionaria o item que por acaso estava ali antes.
+    limparZonas();
+    invalidarCacheTela();
+    tft.fillScreen(COR_FUNDO);
+    tft.fillRect(0, 0, tft.width(), layout::uiHeaderHeight(), COR_CABECALHO);
+    tft.drawRect(0, 0, tft.width(), tft.height(), COR_CABECALHO);
     telaApp.inicializada = true;
     telaApp.titulo[0] = '\0';
     telaApp.valor[0] = '\0';
@@ -447,9 +1512,9 @@ void escreverTelaApp(const char* titulo, const char* valor, const char* rodape,
     std::strncpy(telaApp.titulo, titulo, sizeof(telaApp.titulo) - 1);
     telaApp.titulo[sizeof(telaApp.titulo) - 1] = '\0';
 
-    display->fillRect(0, 0, display->width(), 28, COR_CABECALHO);
-    display->setTextSize(1);
-    display->setTextColor(COR_TITULO);
+    tft.fillRect(0, 0, tft.width(), layout::uiHeaderHeight(), COR_CABECALHO);
+    tft.setTextSize(layout::uiFontSize(1));
+    tft.setTextColor(COR_TITULO);
     imprimirTexto(10, 8, telaApp.titulo);
   }
 
@@ -457,17 +1522,16 @@ void escreverTelaApp(const char* titulo, const char* valor, const char* rodape,
     std::strncpy(telaApp.valor, valor, sizeof(telaApp.valor) - 1);
     telaApp.valor[sizeof(telaApp.valor) - 1] = '\0';
 
-    desenharTextoFaixa(48, 2, COR_VALOR, telaApp.valor);
+    desenharTextoFaixa(layout::uiCenterY() - 20, layout::uiFontSize(2), COR_VALOR, telaApp.valor);
   }
 
   if (rodape != nullptr && (forcarRedesenho || textoMudou(telaApp.rodape, rodape))) {
     std::strncpy(telaApp.rodape, rodape, sizeof(telaApp.rodape) - 1);
     telaApp.rodape[sizeof(telaApp.rodape) - 1] = '\0';
 
-    desenharTextoFaixa(112, 1, COR_RODAPE, telaApp.rodape);
+    desenharTextoFaixa(tft.height() - layout::uiFooterHeight() - 24, layout::uiFontSize(1),
+                       COR_RODAPE, telaApp.rodape);
   }
-
-  display->flush();
 }
 
 void escreverTextoTela(const char* texto, int16_t x, int16_t y, uint16_t cor,
@@ -475,74 +1539,38 @@ void escreverTextoTela(const char* texto, int16_t x, int16_t y, uint16_t cor,
   if (!displayOk) return;
   TravaBarramentoDisplay travaBus;
 
+  // Escreve por cima do que o cache acha que esta na tela.
+  invalidarCacheTela();
+
   if (limparTela) {
-    Serial.println("[IHM] Limpando tela em escreverTextoTela()");
-    display->fillScreen(COR_FUNDO);
+    // Mesmo motivo de escreverTelaApp(): apagar a tela sem apagar as zonas
+    // deixaria alvos invisíveis ativos por cima do novo conteúdo. Quando
+    // limparTela é false esta função é só uma sobreposição de texto na tela
+    // que já está montada, e aí as zonas dela devem continuar valendo.
+    limparZonas();
+    tft.fillScreen(COR_FUNDO);
   }
 
-  display->setTextColor(cor);
-  display->setTextSize(tamanho);
+  tft.setTextColor(cor);
+  tft.setTextSize(tamanho);
   imprimirTexto(x, y, texto);
-  display->flush();
 }
 
-EventoEncoder lerEventoEncoder() {
-  const int currentS1 = digitalRead(ENC_S1_PIN);
-  const int currentS2 = digitalRead(ENC_S2_PIN);
-
-  EventoEncoder evento = EventoEncoder::Nenhum;
-
-  if (currentS1 != eventoEncoder.lastS1) {
-    if (eventoEncoder.lastS1 == HIGH && currentS1 == LOW) {
-      evento = (currentS2 == HIGH) ? EventoEncoder::Horario : EventoEncoder::AntiHorario;
-    }
-    eventoEncoder.lastS1 = currentS1;
-  }
-
-  return evento;
-}
-
-bool teclaClicada() {
-  constexpr unsigned long DEBOUNCE_MS = 30;
-
-  const int leituraAtual = digitalRead(ENC_KEY_PIN);
-  const unsigned long agora = millis();
-
-  if (leituraAtual != tecla.leituraAnterior) {
-    tecla.ultimaMudancaMs = agora;
-    tecla.leituraAnterior = leituraAtual;
-  }
-
-  bool cliqueDetectado = false;
-  if ((agora - tecla.ultimaMudancaMs) >= DEBOUNCE_MS && leituraAtual != tecla.estadoEstavel) {
-    const bool estadoAnteriorEraPressionado = (tecla.estadoEstavel == LOW);
-    tecla.estadoEstavel = leituraAtual;
-    const bool estadoNovoEhSolto = (tecla.estadoEstavel == HIGH);
-    if (estadoAnteriorEraPressionado && estadoNovoEhSolto) {
-      cliqueDetectado = true;
-    }
-  }
-
-  return cliqueDetectado;
-}
+// ---------------------------------------------------------------------
+// Brilho e som
+// ---------------------------------------------------------------------
 
 void setBrilho(uint8_t nivel) {
   if (nivel > BRILHO_NIVEL_MAXIMO) nivel = BRILHO_NIVEL_MAXIMO;
   uint32_t duty = (static_cast<uint32_t>(nivel) * 255U) / BRILHO_NIVEL_MAXIMO;
-  Serial.printf("[DISPLAY] Brilho solicitado: %u | Duty PWM calculado: %u | Logica invertida: nao\n",
-                static_cast<unsigned>(nivel), static_cast<unsigned>(duty));
 
   if (FORCE_DISPLAY_BACKLIGHT_DIAGNOSTIC) {
     // Ignora o LEDC por completo: o backlight já está em HIGH via
-    // digitalWrite() feito em init() — não chama ledcWrite() nesta
-    // build de diagnóstico, para eliminar o canal/frequência/resolução
-    // do PWM como possível causa de um backlight apagado.
-    Serial.println("[DISPLAY] Diagnostico: backlight via digitalWrite HIGH, PWM ignorado");
+    // digitalWrite() feito em init().
     return;
   }
 
   if (FORCE_MAX_BRIGHTNESS_FOR_DIAGNOSTIC) {
-    Serial.println("[DISPLAY] Diagnostico: forcando duty PWM maximo (valor nao persistido em NVS)");
     duty = 255;
   }
 
@@ -559,41 +1587,49 @@ void beep(uint16_t duracaoMs) {
   tone(BUZZER_PIN, BUZZER_FREQUENCIA_HZ, duracaoMs);
 }
 
+// ---------------------------------------------------------------------
+// Primitivas gráficas
+// ---------------------------------------------------------------------
+
 void desenharCabecalhoRodape(const char* titulo, const char* rodape) {
   if (!displayOk) return;
 
-  const int16_t largura = display->width();
-  const int16_t altura = display->height();
+  const int16_t largura = tft.width();
+  const int16_t altura = tft.height();
   const int16_t alturaCabecalho = layout::uiHeaderHeight();
   const int16_t alturaRodape = layout::uiFooterHeight();
   const uint8_t fonte = layout::uiFontSize(1);
 
-  display->fillRect(0, 0, largura, alturaCabecalho, COR_CABECALHO);
-
+  // Cabecalho PLANO, como a AppBar do app (elevation: 0, fundo =
+  // surface): a separacao vem da regua fina abaixo, nao de um bloco de
+  // cor. Sem forcar maiusculas: a AppBar escreve o titulo em caixa normal.
+  char bufferTitulo[32] = "";
   if (titulo != nullptr) {
-    char bufferTitulo[24];
-    truncarTexto(bufferTitulo, sizeof(bufferTitulo), titulo,
-                 largura - 2 * layout::uiMargin(), fonte);
-    // Título do cabeçalho sempre em maiúsculo — destaca "em que tela
-    // estou" — centralizado aqui em vez de escrever cada string de
-    // título já em maiúsculo em cada tela/chamador. Só ASCII simples
-    // (a-z); os títulos do firmware não usam acentos.
-    for (char* c = bufferTitulo; *c != '\0'; c++) {
-      if (*c >= 'a' && *c <= 'z') *c = static_cast<char>(*c - 'a' + 'A');
-    }
-    display->setTextSize(fonte);
-    display->setTextColor(COR_TITULO);
-    imprimirTexto(layout::uiMargin(), alturaCabecalho / 2 - 4, bufferTitulo);
+    truncarTexto(bufferTitulo, sizeof(bufferTitulo), titulo, largura - 2 * layout::uiMargin(),
+                 fonte);
+  }
+  const uint32_t assinaturaCabecalho =
+      Assinatura().num(4).num(largura).num(alturaCabecalho).texto(bufferTitulo).valor();
+  if (slotMudou(SLOT_CABECALHO, assinaturaCabecalho)) {
+    desenharEmFaixa(0, 0, largura, alturaCabecalho, [&](TFT_eSPI& g, int16_t ox, int16_t oy) {
+      g.fillRect(ox, oy, largura, alturaCabecalho, COR_CABECALHO);
+      g.drawFastHLine(ox, oy + alturaCabecalho - 1, largura, UI_COR_CONTORNO);
+      g.setTextSize(fonte);
+      g.setTextColor(COR_TITULO, COR_CABECALHO);
+      imprimirTexto(g, ox + layout::uiMargin(), oy + alturaCabecalho / 2 - 4 * fonte,
+                    bufferTitulo);
+    });
   }
 
+  // O "rodape" de dica da main virou uma linha de texto LOGO ACIMA da barra
+  // de botões (que ocupa o rodapé de verdade agora).
   if (rodape != nullptr) {
-    char bufferRodape[24];
-    truncarTexto(bufferRodape, sizeof(bufferRodape), rodape,
-                 largura - 2 * layout::uiMargin(), fonte);
-    display->fillRect(0, altura - alturaRodape, largura, alturaRodape, COR_FUNDO);
-    display->setTextSize(fonte);
-    display->setTextColor(COR_RODAPE);
-    imprimirTexto(layout::uiMargin(), altura - alturaRodape + 2, bufferRodape);
+    const int16_t y = altura - alturaRodape - 8 * fonte - 2;
+    desenharLinhaTexto(SLOT_DICA, y, largura, 8 * fonte + 2, rodape, COR_RODAPE);
+  } else {
+    // Sem dica, a faixa dela pertence ao conteudo (uma linha de lista pode
+    // passar por ali): o que estiver desenhado nela deixa de ser a dica.
+    cacheSlots[SLOT_DICA] = 0;
   }
 }
 
@@ -601,100 +1637,115 @@ void desenharListaMenu(const char* titulo, const char* const* itens, uint8_t qua
                        uint8_t indiceSelecionado, uint8_t& offsetRolagem) {
   if (!displayOk) return;
 
-  const uint8_t itensVisiveis = layout::uiItensVisiveis();
+  const GeometriaLista geo = geometriaLista(false);
+  const uint8_t itensVisiveis = geo.linhas;
 
   // Mantem o item selecionado sempre dentro da janela visivel: rola para
   // cima se ele ficou acima do topo, ou para baixo se ficou depois da
-  // ultima linha desenhada.
-  if (itensVisiveis > 0) {
-    if (indiceSelecionado < offsetRolagem) {
-      offsetRolagem = indiceSelecionado;
-    } else if (indiceSelecionado >= offsetRolagem + itensVisiveis) {
-      offsetRolagem = indiceSelecionado - itensVisiveis + 1;
-    }
+  // ultima linha desenhada. E nunca deixa linhas vazias no fim de uma lista
+  // que tem itens para preenche-las (offset herdado de outra tela).
+  if (indiceSelecionado < offsetRolagem) {
+    offsetRolagem = indiceSelecionado;
+  } else if (indiceSelecionado >= offsetRolagem + itensVisiveis) {
+    offsetRolagem = indiceSelecionado - itensVisiveis + 1;
+  }
+  if (quantidade > itensVisiveis && offsetRolagem > quantidade - itensVisiveis) {
+    offsetRolagem = quantidade - itensVisiveis;
+  } else if (quantidade <= itensVisiveis) {
+    offsetRolagem = 0;
   }
 
   TravaBarramentoDisplay travaBus;
+  limparZonas();
+  indiceSelecionadoAtual = indiceSelecionado;
+  quantidadeItensAtual = quantidade;
+  ocuparConteudo(TipoConteudo::Lista);
 
-  static bool ponteiroJaLogado = false;
-  if (!ponteiroJaLogado) {
-    Serial.printf("[DISPLAY] Objeto no menu principal: %p\n", static_cast<void*>(display));
-    ponteiroJaLogado = true;
-  }
-
-  Serial.println("[IHM] Limpando tela em desenharListaMenu()");
-  display->fillScreen(COR_FUNDO);
+  // Sem fillScreen: passagem única, ver o comentário em limparSobra().
   desenharCabecalhoRodape(titulo);
 
-  const int16_t yInicial = layout::uiHeaderHeight() + layout::uiMargin();
-  const int16_t alturaLinha = layout::uiLineSpacing();
-  const uint8_t fonte = layout::uiFontSize(1);
+  const bool rolagem = quantidade > itensVisiveis;
+  const int16_t larguraLinha = tft.width() - (rolagem ? UI_LARGURA_COLUNA_ROLAGEM : 0);
 
-  for (uint8_t linha = 0; linha < itensVisiveis; linha++) {
+  // Sobra entre o cabeçalho e a primeira linha — nenhum item a cobre.
+  if (geo.yInicial > layout::uiHeaderHeight()) {
+    tft.fillRect(0, layout::uiHeaderHeight(), tft.width(),
+                 geo.yInicial - layout::uiHeaderHeight(), COR_FUNDO);
+  }
+
+  uint8_t linha = 0;
+  for (; linha < itensVisiveis; linha++) {
     const uint8_t indiceItem = offsetRolagem + linha;
     if (indiceItem >= quantidade) break;
 
-    const int16_t y = yInicial + linha * alturaLinha;
-    const bool selecionado = (indiceItem == indiceSelecionado);
+    const int16_t y = geo.yInicial + linha * geo.alturaLinha;
+    desenharLinhaLista(linha, y, larguraLinha, geo.alturaLinha, itens[indiceItem],
+                       indiceItem == indiceSelecionado, UI_MOSTRAR_SETA_ITEM);
+    // A zona termina onde a linha termina: nada de area tocavel por cima da
+    // barra de rolagem nem da linha vizinha.
+    registrarZona(0, y, larguraLinha, geo.alturaLinha, AcaoToque::ItemLista, indiceItem);
+  }
+  invalidarSlots(SLOT_PRIMEIRO_ITEM + linha, QTD_SLOTS_CACHE - 1);
 
-    if (selecionado) {
-      display->fillRect(0, y - 1, display->width(), alturaLinha, COR_SELECIONADO);
-    }
-
-    char buffer[32];
-    truncarTexto(buffer, sizeof(buffer), itens[indiceItem],
-                 display->width() - 2 * layout::uiMargin(), fonte);
-
-    display->setTextSize(fonte);
-    display->setTextColor(selecionado ? COR_TEXTO_SELECIONADO : COR_TEXTO);
-    imprimirTexto(layout::uiMargin(), y, buffer);
+  if (rolagem) {
+    desenharBarraRolagem(geo.yInicial, itensVisiveis * geo.alturaLinha, quantidade, itensVisiveis,
+                         offsetRolagem);
+  } else {
+    cacheSlots[SLOT_BARRA_ROLAGEM] = 0;
   }
 
-  display->flush();
+  limparSobra(geo.yInicial + linha * geo.alturaLinha, false);
+  desenharBotoesRodape(RotulosRodape{});
 }
 
 void desenharConfirmacao(const char* pergunta, uint8_t indiceSelecionado) {
   if (!displayOk) return;
   TravaBarramentoDisplay travaBus;
+  limparZonas();
+  indiceSelecionadoAtual = indiceSelecionado;
+  quantidadeItensAtual = 2;
+  ocuparConteudo(TipoConteudo::Lista);
 
-  Serial.println("[IHM] Limpando tela em desenharConfirmacao()");
-  display->fillScreen(COR_FUNDO);
-  desenharCabecalhoRodape("Confirmar", "KEY confirma");
+  // Um toque so: encostar na opcao destaca, soltar confirma.
+  desenharCabecalhoRodape("Confirmar", "Toque na opcao desejada");
 
   const uint8_t fonte = layout::uiFontSize(1);
-  const int16_t yPergunta = layout::uiHeaderHeight() + layout::uiMargin();
+  const int16_t largura = tft.width();
+  const int16_t yCabecalho = layout::uiHeaderHeight();
+  const int16_t alturaLinha = layout::uiLineSpacing();
+  const int16_t yPergunta = yCabecalho + layout::uiMargin();
+  const int16_t alturaPergunta = 8 * fonte + 4;
+  // As opcoes vem logo abaixo da pergunta, e nao numa posicao fixa: antes
+  // elas comecavam duas linhas de lista abaixo da pergunta e a segunda
+  // opcao era desenhada por cima da dica e da barra de botoes.
+  const int16_t yOpcoes = yPergunta + alturaPergunta + layout::uiMargin() / 2;
 
-  char bufferPergunta[40];
-  truncarTexto(bufferPergunta, sizeof(bufferPergunta), pergunta,
-               display->width() - 2 * layout::uiMargin(), fonte);
-  display->setTextSize(fonte);
-  display->setTextColor(COR_VALOR);
-  imprimirTexto(layout::uiMargin(), yPergunta, bufferPergunta);
+  tft.fillRect(0, yCabecalho, largura, yPergunta - yCabecalho, COR_FUNDO);
+  desenharLinhaTexto(SLOT_PRIMEIRO_ITEM, yPergunta, largura, alturaPergunta, pergunta, COR_VALOR);
+  tft.fillRect(0, yPergunta + alturaPergunta, largura, yOpcoes - (yPergunta + alturaPergunta),
+               COR_FUNDO);
 
   static const char* const opcoes[2] = {"Sim", "Nao"};
-  const int16_t yOpcoes = yPergunta + layout::uiLineSpacing() * 2;
   for (uint8_t i = 0; i < 2; i++) {
-    const bool selecionado = (i == indiceSelecionado);
-    const int16_t y = yOpcoes + i * layout::uiLineSpacing();
-    if (selecionado) {
-      display->fillRect(0, y - 1, display->width(), layout::uiLineSpacing(), COR_SELECIONADO);
-    }
-    display->setTextSize(fonte);
-    display->setTextColor(selecionado ? COR_TEXTO_SELECIONADO : COR_TEXTO);
-    imprimirTexto(layout::uiMargin(), y, opcoes[i]);
+    const int16_t y = yOpcoes + i * alturaLinha;
+    desenharLinhaLista(1 + i, y, largura, alturaLinha, opcoes[i], i == indiceSelecionado, false);
+    registrarZona(0, y, largura, alturaLinha, AcaoToque::ItemLista, i);
   }
+  invalidarSlots(SLOT_PRIMEIRO_ITEM + 3, QTD_SLOTS_CACHE - 1);
+  cacheSlots[SLOT_BARRA_ROLAGEM] = 0;
 
-  display->flush();
+  limparSobra(yOpcoes + 2 * alturaLinha, true);
+  desenharBotoesRodape(RotulosRodape{});
 }
 
 void desenharValorEditavel(const char* titulo, int32_t valor, int32_t minimo,
                            int32_t maximo, const char* unidade) {
   if (!displayOk) return;
   TravaBarramentoDisplay travaBus;
+  limparZonas();
+  ocuparConteudo(TipoConteudo::Valor);
 
-  Serial.println("[IHM] Limpando tela em desenharValorEditavel()");
-  display->fillScreen(COR_FUNDO);
-  desenharCabecalhoRodape(titulo, "Gire para ajustar, KEY confirma");
+  desenharCabecalhoRodape(titulo, "- e + ajustam, OK confirma");
 
   const uint8_t fonteValor = layout::uiFontSize(3);
   char textoValor[16];
@@ -704,99 +1755,167 @@ void desenharValorEditavel(const char* titulo, int32_t valor, int32_t minimo,
     snprintf(textoValor, sizeof(textoValor), "%ld", static_cast<long>(valor));
   }
 
-  const int16_t larguraTexto = static_cast<int16_t>(std::strlen(textoValor) * 6 * fonteValor);
-  display->setTextSize(fonteValor);
-  display->setTextColor(COR_VALOR);
-  imprimirTexto(layout::uiCenterX() - larguraTexto / 2, layout::uiCenterY() - 8 * fonteValor / 2,
-                textoValor);
+  const int16_t largura = tft.width();
+  const int16_t yCabecalho = layout::uiHeaderHeight();
+  const int16_t alturaValor = 8 * fonteValor;
+  const int16_t yValor = layout::uiCenterY() - alturaValor / 2;
 
   const int16_t barraX = layout::uiMargin();
-  const int16_t barraY = display->height() - layout::uiFooterHeight() - layout::uiHeight(14);
-  const int16_t barraLargura = display->width() - 2 * layout::uiMargin();
+  const int16_t barraY = tft.height() - layout::uiFooterHeight() - layout::uiHeight(20);
+  const int16_t barraLargura = largura - 2 * layout::uiMargin();
   const int16_t barraAltura = layout::uiHeight(8);
 
-  display->drawRect(barraX, barraY, barraLargura, barraAltura, COR_RODAPE);
+  // Cada regiao e pintada uma vez, sem sobreposicao: sobra de cima, faixa do
+  // valor, sobra do meio, barra, sobra de baixo. Antes a sobra do meio era
+  // apagada ATE a dica, passando por cima da barra — que piscava a cada
+  // toque em - ou +.
+  tft.fillRect(0, yCabecalho, largura, yValor - yCabecalho, COR_FUNDO);
+
+  // O numero muda de largura (de "9" para "10"): a faixa inteira e
+  // remontada, mas no sprite — o valor antigo vira o novo sem apagar.
+  desenharEmFaixa(0, yValor, largura, alturaValor, [&](TFT_eSPI& g, int16_t ox, int16_t oy) {
+    g.fillRect(ox, oy, largura, alturaValor, COR_FUNDO);
+    const int16_t larguraTexto = static_cast<int16_t>(std::strlen(textoValor) * 6 * fonteValor);
+    g.setTextSize(fonteValor);
+    g.setTextColor(COR_VALOR, COR_FUNDO);
+    imprimirTexto(g, ox + layout::uiCenterX() - larguraTexto / 2, oy, textoValor);
+  });
+
+  tft.fillRect(0, yValor + alturaValor, largura, barraY - (yValor + alturaValor), COR_FUNDO);
+  tft.fillRect(0, barraY, barraX, barraAltura, COR_FUNDO);
+  tft.fillRect(barraX + barraLargura, barraY, largura - (barraX + barraLargura), barraAltura,
+               COR_FUNDO);
+
+  tft.drawRect(barraX, barraY, barraLargura, barraAltura, COR_RODAPE);
   const int32_t faixa = maximo - minimo;
   int16_t preenchido = 0;
   if (faixa > 0 && barraLargura > 2) {
     preenchido = static_cast<int16_t>((static_cast<int64_t>(valor - minimo) * (barraLargura - 2)) / faixa);
   }
+  // Interior da barra sempre repintado por inteiro (parte cheia + parte
+  // vazia): ao DIMINUIR o valor, só pintar a parte cheia deixaria o
+  // restante do preenchimento anterior na tela.
   if (preenchido > 0) {
-    display->fillRect(barraX + 1, barraY + 1, preenchido, barraAltura - 2, COR_CABECALHO);
+    tft.fillRect(barraX + 1, barraY + 1, preenchido, barraAltura - 2, UI_COR_PRIMARIA);
+  }
+  if (preenchido < barraLargura - 2) {
+    tft.fillRect(barraX + 1 + preenchido, barraY + 1, barraLargura - 2 - preenchido,
+                 barraAltura - 2, COR_FUNDO);
   }
 
-  display->flush();
+  limparSobra(barraY + barraAltura, true);
+
+  // Mesmas posições e mesmas ações dos outros ecrãs; só os rótulos do meio
+  // mudam, porque aqui "anterior/próximo" significa "diminui/aumenta".
+  RotulosRodape rotulos;
+  rotulos.anterior = "-";
+  rotulos.proximo = "+";
+  desenharBotoesRodape(rotulos);
 }
 
 void desenharListaRolavel(const char* titulo, const char* const* linhas,
                           uint8_t quantidade, uint8_t offsetRolagem) {
   if (!displayOk) return;
   TravaBarramentoDisplay travaBus;
+  limparZonas();
+  // Habilita o arrasto vertical para rolar: esta tela não tem itens
+  // selecionáveis, mas a rolagem dela também é feita por Proximo/Anterior,
+  // que é o que o gesto emite.
+  quantidadeItensAtual = quantidade;
+  ocuparConteudo(TipoConteudo::Lista);
 
-  Serial.println("[IHM] Limpando tela em desenharListaRolavel()");
-  display->fillScreen(COR_FUNDO);
-  desenharCabecalhoRodape(titulo, "Role para ver mais");
+  desenharCabecalhoRodape(titulo, "Arraste ou use ^ v para rolar");
 
-  const uint8_t itensVisiveis = layout::uiItensVisiveis();
-  const int16_t yInicial = layout::uiHeaderHeight() + layout::uiMargin();
-  const int16_t alturaLinha = layout::uiLineSpacing();
-  const uint8_t fonte = layout::uiFontSize(1);
-
-  display->setTextSize(fonte);
-  display->setTextColor(COR_TEXTO);
-
-  for (uint8_t linha = 0; linha < itensVisiveis; linha++) {
-    const uint8_t indice = offsetRolagem + linha;
-    if (indice >= quantidade) break;
-
-    char buffer[32];
-    truncarTexto(buffer, sizeof(buffer), linhas[indice],
-                 display->width() - 2 * layout::uiMargin(), fonte);
-    imprimirTexto(layout::uiMargin(), yInicial + linha * alturaLinha, buffer);
+  // A geometria ja desconta a linha de dica acima da barra de botoes.
+  const GeometriaLista geo = geometriaLista(true);
+  const uint8_t itensVisiveis = geo.linhas;
+  if (quantidade > itensVisiveis && offsetRolagem > quantidade - itensVisiveis) {
+    offsetRolagem = quantidade - itensVisiveis;
+  } else if (quantidade <= itensVisiveis) {
+    offsetRolagem = 0;
   }
 
-  display->flush();
+  const bool rolagem = quantidade > itensVisiveis;
+  const int16_t larguraLinha = tft.width() - (rolagem ? UI_LARGURA_COLUNA_ROLAGEM : 0);
+
+  if (geo.yInicial > layout::uiHeaderHeight()) {
+    tft.fillRect(0, layout::uiHeaderHeight(), tft.width(),
+                 geo.yInicial - layout::uiHeaderHeight(), COR_FUNDO);
+  }
+
+  uint8_t linha = 0;
+  for (; linha < itensVisiveis; linha++) {
+    const uint8_t indice = offsetRolagem + linha;
+    if (indice >= quantidade) break;
+    const int16_t y = geo.yInicial + linha * geo.alturaLinha;
+    desenharLinhaTexto(SLOT_PRIMEIRO_ITEM + linha, y, larguraLinha, geo.alturaLinha,
+                       linhas[indice], COR_TEXTO);
+  }
+  invalidarSlots(SLOT_PRIMEIRO_ITEM + linha, QTD_SLOTS_CACHE - 1);
+
+  if (rolagem) {
+    desenharBarraRolagem(geo.yInicial, itensVisiveis * geo.alturaLinha, quantidade, itensVisiveis,
+                         offsetRolagem);
+  } else {
+    cacheSlots[SLOT_BARRA_ROLAGEM] = 0;
+  }
+
+  limparSobra(geo.yInicial + linha * geo.alturaLinha, true);
+  desenharBotoesRodape(RotulosRodape{});
 }
+
+uint8_t linhasVisiveisListaRolavel() { return geometriaLista(true).linhas; }
+
+// As telas de desenho esparso (QR code, mensagem, grafico) nao dao para
+// montar faixa a faixa — uma curva nao tem retangulo proprio. Elas sao
+// redesenhadas inteiras, mas SO quando o conteudo muda: um redesenho
+// pedido com o mesmo conteudo (dado ao vivo chegando, comando do app) e
+// pulado, em vez de apagar e repintar a mesma coisa.
+bool telaEsparsaMudou(uint32_t assinatura) { return slotMudou(SLOT_TELA_ESPARSA, assinatura); }
 
 void desenharGradeModulos(const char* titulo, uint8_t dimensao,
                           bool (*modulo)(uint8_t, uint8_t)) {
   if (!displayOk) return;
   TravaBarramentoDisplay travaBus;
-
-  Serial.println("[IHM] Limpando tela em desenharGradeModulos()");
-  display->fillScreen(COR_FUNDO);
+  limparZonas();
+  ocuparConteudo(TipoConteudo::Esparso);
   desenharCabecalhoRodape(titulo);
 
-  if (dimensao == 0 || modulo == nullptr) {
-    display->flush();
-    return;
+  Assinatura assinatura;
+  assinatura.num(6).texto(titulo).num(dimensao);
+  if (modulo != nullptr) {
+    for (uint8_t y = 0; y < dimensao; y++) {
+      for (uint8_t x = 0; x < dimensao; x++) assinatura.num(modulo(x, y));
+    }
   }
 
-  const int16_t areaLargura = display->width();
-  const int16_t areaAltura = display->height() - layout::uiHeaderHeight() - layout::uiFooterHeight();
-  const int16_t ladoDisponivel = (areaLargura < areaAltura) ? areaLargura : areaAltura;
+  if (telaEsparsaMudou(assinatura.valor())) {
+    limparConteudo(false);
 
-  const int16_t tamanhoCelula = ladoDisponivel / dimensao;
-  if (tamanhoCelula <= 0) {
-    display->flush();
-    return;
-  }
+    const int16_t areaLargura = tft.width();
+    const int16_t areaAltura =
+        tft.height() - layout::uiHeaderHeight() - layout::uiFooterHeight();
+    const int16_t ladoDisponivel = (areaLargura < areaAltura) ? areaLargura : areaAltura;
+    const int16_t tamanhoCelula = (dimensao > 0) ? ladoDisponivel / dimensao : 0;
 
-  const int16_t ladoGrade = tamanhoCelula * dimensao;
-  const int16_t offsetX = (areaLargura - ladoGrade) / 2;
-  const int16_t offsetY = layout::uiHeaderHeight() + (areaAltura - ladoGrade) / 2;
+    if (modulo != nullptr && tamanhoCelula > 0) {
+      const int16_t ladoGrade = tamanhoCelula * dimensao;
+      const int16_t offsetX = (areaLargura - ladoGrade) / 2;
+      const int16_t offsetY = layout::uiHeaderHeight() + (areaAltura - ladoGrade) / 2;
 
-  display->fillRect(offsetX, offsetY, ladoGrade, ladoGrade, 0xFFFF);
-  for (uint8_t y = 0; y < dimensao; y++) {
-    for (uint8_t x = 0; x < dimensao; x++) {
-      if (modulo(x, y)) {
-        display->fillRect(offsetX + x * tamanhoCelula, offsetY + y * tamanhoCelula, tamanhoCelula,
-                           tamanhoCelula, 0x0000);
+      tft.fillRect(offsetX, offsetY, ladoGrade, ladoGrade, cor(0xFFFFFF));
+      for (uint8_t y = 0; y < dimensao; y++) {
+        for (uint8_t x = 0; x < dimensao; x++) {
+          if (modulo(x, y)) {
+            tft.fillRect(offsetX + x * tamanhoCelula, offsetY + y * tamanhoCelula, tamanhoCelula,
+                         tamanhoCelula, cor(0x000000));
+          }
+        }
       }
     }
   }
 
-  display->flush();
+  desenharBotoesRodape(RotulosRodape{});
 }
 
 void desenharTecladoTexto(const char* rotuloCampo, const char* valorAtual,
@@ -804,157 +1923,360 @@ void desenharTecladoTexto(const char* rotuloCampo, const char* valorAtual,
                           uint8_t indiceSelecionado) {
   if (!displayOk) return;
   TravaBarramentoDisplay travaBus;
+  limparZonas();
+  indiceSelecionadoAtual = indiceSelecionado;
+  quantidadeItensAtual = quantidade;
+  ocuparConteudo(TipoConteudo::Teclado);
+  // A grade cobre a faixa da dica e a da barra de botoes: o que o cache
+  // lembrava delas deixa de estar na tela.
+  invalidarSlots(SLOT_DICA, SLOT_BOTAO_RODAPE + 3);
+  cacheSlots[SLOT_BARRA_ROLAGEM] = 0;
 
-  Serial.println("[IHM] Limpando tela em desenharTecladoTexto()");
-  display->fillScreen(COR_FUNDO);
+  // ---------------------------------------------------------------------
+  // O teclado NAO usa a barra de quatro botoes do rodape.
+  // ---------------------------------------------------------------------
+  // Ele e a unica tela em que o proprio conteudo ja tem tudo o que os
+  // botoes ofereciam: mover e escolher se faz tocando na tecla, e o
+  // alfabeto tem simbolos proprios para confirmar (OK), apagar (<-) e
+  // cancelar (ESC). Manter a barra ali custava 42px de altura para repetir
+  // funcoes que as teclas ja cumprem — e com os alvos de toque em 42px isso
+  // deixou de ser um detalhe: so cabiam 4 linhas de 7 colunas, 28 dos 40
+  // simbolos, com 12 cortados fora da tela.
+  //
+  // Sobra apenas um botao "<" no cabecalho, porque sair da tela e a unica
+  // acao que o alfabeto nao expressa de forma obvia para quem nunca viu o
+  // ESC.
+  const int16_t larguraTela = tft.width();
+  const int16_t alturaCabecalho =
+      (layout::uiHeaderHeight() > UI_ALTURA_MINIMA_ALVO_TOQUE) ? layout::uiHeaderHeight()
+                                                               : UI_ALTURA_MINIMA_ALVO_TOQUE;
+  const uint8_t fonteTitulo = layout::uiFontSize(1);
+  const int16_t ladoBotaoVoltar = alturaCabecalho;
+  const int16_t xVoltar = larguraTela - ladoBotaoVoltar;
 
-  char titulo[40];
+  char titulo[48];
   snprintf(titulo, sizeof(titulo), "%s: %s", rotuloCampo != nullptr ? rotuloCampo : "",
            valorAtual != nullptr ? valorAtual : "");
-  desenharCabecalhoRodape(titulo, "Gire: mover  KEY: escolher");
+  char tituloCortado[48];
+  truncarTexto(tituloCortado, sizeof(tituloCortado), titulo,
+               larguraTela - ladoBotaoVoltar - 2 * layout::uiMargin(), fonteTitulo);
+
+  // Cabecalho (titulo + botao voltar no canto superior direito) numa faixa
+  // so: digitar uma letra troca o titulo sem piscar o cabecalho.
+  const uint32_t assinaturaCabecalho =
+      Assinatura().num(9).num(alturaCabecalho).texto(tituloCortado).valor();
+  if (slotMudou(SLOT_CABECALHO, assinaturaCabecalho)) {
+    desenharEmFaixa(0, 0, larguraTela, alturaCabecalho, [&](TFT_eSPI& g, int16_t ox, int16_t oy) {
+      g.fillRect(ox, oy, larguraTela, alturaCabecalho, COR_CABECALHO);
+      g.drawFastHLine(ox, oy + alturaCabecalho - 1, larguraTela, UI_COR_CONTORNO);
+      g.setTextSize(fonteTitulo);
+      g.setTextColor(COR_TITULO, COR_CABECALHO);
+      imprimirTexto(g, ox + layout::uiMargin(), oy + (alturaCabecalho - 8 * fonteTitulo) / 2,
+                    tituloCortado);
+      desenharBotao(g, ox + xVoltar, oy, ladoBotaoVoltar, alturaCabecalho, "<", false, false);
+    });
+  }
+  registrarZona(xVoltar, 0, ladoBotaoVoltar, alturaCabecalho, AcaoToque::Voltar, 0, "<");
+
+  // A grade ocupa TODO o resto da tela, ate a borda de baixo.
+  const int16_t areaY = alturaCabecalho;
+  const int16_t areaAltura = tft.height() - areaY;
 
   if (quantidade == 0 || rotulos == nullptr) {
-    display->flush();
+    if (telaEsparsaMudou(Assinatura().num(10).num(0).valor())) {
+      tft.fillRect(0, areaY, larguraTela, areaAltura, COR_FUNDO);
+    }
     return;
   }
 
-  const uint8_t fonte = layout::uiFontSize(1);
-  // ~6px de largura de caractere por unidade de textSize na fonte padrão
-  // GFX (mesma estimativa usada em truncarTexto()); cada célula cabe até 2
-  // caracteres (rótulos como "OK") mais uma margem interna pequena.
-  const int16_t larguraCelula = 6 * fonte * 2 + layout::uiWidth(4);
-  const int16_t alturaCelula = 8 * fonte + layout::uiHeight(4);
-
-  const int16_t areaLargura = display->width() - 2 * layout::uiMargin();
-  uint8_t colunas = static_cast<uint8_t>(areaLargura / larguraCelula);
-  if (colunas < 1) colunas = 1;
-  if (colunas > quantidade) colunas = quantidade;
-
-  const int16_t xInicial = layout::uiMargin();
-  const int16_t yInicial = layout::uiHeaderHeight() + layout::uiMargin();
-  const int16_t yLimite = display->height() - layout::uiFooterHeight();
-
-  display->setTextSize(fonte);
-
-  for (uint8_t i = 0; i < quantidade; i++) {
-    const uint8_t linha = i / colunas;
-    const uint8_t coluna = i % colunas;
-    const int16_t x = xInicial + coluna * larguraCelula;
-    const int16_t y = yInicial + linha * alturaCelula;
-
-    // Grade grande demais pra área disponível: corta os últimos símbolos
-    // em vez de invadir o rodapé (não deveria acontecer com o alfabeto
-    // atual, mas protege contra um alfabeto maior no futuro).
-    if (y + alturaCelula > yLimite) break;
-
-    const bool selecionado = (i == indiceSelecionado);
-    if (selecionado) {
-      display->fillRect(x, y, larguraCelula - 1, alturaCelula - 1, COR_SELECIONADO);
+  // Escolhe o numero de colunas que da as MAIORES teclas cabendo todas.
+  // Procura o arranjo que maximiza o menor lado da celula — assim as teclas
+  // ficam o mais proximas de quadradas possivel, em vez de largas e baixas
+  // (ou o contrario), que e o que acontece ao fixar as colunas na mao.
+  uint8_t melhorColunas = 1;
+  int16_t melhorLado = 0;
+  for (uint8_t colunas = 1; colunas <= quantidade; colunas++) {
+    const uint8_t linhas = (quantidade + colunas - 1) / colunas;
+    const int16_t largCelula = larguraTela / colunas;
+    const int16_t altCelula = areaAltura / linhas;
+    const int16_t lado = (largCelula < altCelula) ? largCelula : altCelula;
+    if (lado > melhorLado) {
+      melhorLado = lado;
+      melhorColunas = colunas;
     }
-    display->setTextColor(selecionado ? COR_TEXTO_SELECIONADO : COR_TEXTO);
-    imprimirTexto(x + 2, y + 2, rotulos[i]);
   }
 
-  display->flush();
+  const uint8_t colunas = melhorColunas;
+  const uint8_t linhas = (quantidade + colunas - 1) / colunas;
+  const int16_t largCelula = larguraTela / colunas;
+  const int16_t altCelula = areaAltura / linhas;
+
+  // Centraliza a grade na sobra da divisao inteira.
+  const int16_t xInicial = (larguraTela - colunas * largCelula) / 2;
+  const int16_t yInicial = areaY + (areaAltura - linhas * altCelula) / 2;
+
+  // O fundo da area so e pintado quando a geometria da grade muda (entrada
+  // na tela): dali em diante cada tecla repinta a propria celula, e so as
+  // que mudaram (a que perdeu e a que ganhou o destaque).
+  const uint32_t assinaturaGrade = Assinatura()
+                                       .num(10)
+                                       .num(quantidade)
+                                       .num(colunas)
+                                       .num(largCelula)
+                                       .num(altCelula)
+                                       .num(yInicial)
+                                       .valor();
+  if (telaEsparsaMudou(assinaturaGrade)) {
+    tft.fillRect(0, areaY, larguraTela, areaAltura, COR_FUNDO);
+    invalidarSlots(SLOT_PRIMEIRO_ITEM, QTD_SLOTS_CACHE - 1);
+  }
+
+  // Tecla desenhada um pouco menor que a celula (UI_TECLADO_RECUO_VISUAL), e
+  // a area sensivel menor ainda (UI_TECLADO_FOLGA_TOQUE): entre duas teclas
+  // sobra uma faixa morta, e o dedo que cai na divisa nao aciona a vizinha.
+  const int16_t larguraTecla = largCelula - 2 * UI_TECLADO_RECUO_VISUAL;
+  const int16_t alturaTecla = altCelula - 2 * UI_TECLADO_RECUO_VISUAL;
+
+  // Maior fonte com que os rotulos de 1 caractere caibam na tecla. Rotulos
+  // mais longos ("OK", "<-", "ESC") descem de tamanho so o necessario para
+  // nao vazar da tecla. Metrica da fonte 1 do TFT_eSPI: 6px de avanco e 8px
+  // de altura por unidade de tamanho (+1px do negrito simulado).
+  uint8_t fonteBase = 4;
+  while (fonteBase > 1 && (6 * fonteBase + 1 > larguraTecla - 4 || 8 * fonteBase > alturaTecla - 4)) {
+    fonteBase--;
+  }
+  // Mesma escala das versoes anteriores: teclas grandes demais ficavam com
+  // letras desproporcionais ao resto da interface.
+  if (fonteBase > 2) fonteBase = 2;
+
+  for (uint8_t i = 0; i < quantidade; i++) {
+    const int16_t x = xInicial + (i % colunas) * largCelula;
+    const int16_t y = yInicial + (i / colunas) * altCelula;
+    const bool selecionado = (i == indiceSelecionado);
+    const char* rotulo = rotulos[i];
+
+    const uint32_t assinaturaTecla =
+        Assinatura().num(11).num(x).num(y).texto(rotulo).num(selecionado).valor();
+    if (slotMudou(SLOT_PRIMEIRO_ITEM + i, assinaturaTecla)) {
+      desenharEmFaixa(x, y, largCelula, altCelula, [&](TFT_eSPI& g, int16_t ox, int16_t oy) {
+        const uint16_t corFundoTecla = selecionado ? COR_SELECIONADO : UI_COR_CARTAO;
+        g.fillRect(ox, oy, largCelula, altCelula, COR_FUNDO);
+        g.fillRoundRect(ox + UI_TECLADO_RECUO_VISUAL, oy + UI_TECLADO_RECUO_VISUAL, larguraTecla,
+                        alturaTecla, UI_RAIO_BOTAO, corFundoTecla);
+        g.drawRoundRect(ox + UI_TECLADO_RECUO_VISUAL, oy + UI_TECLADO_RECUO_VISUAL, larguraTecla,
+                        alturaTecla, UI_RAIO_BOTAO,
+                        selecionado ? UI_COR_PRIMARIA : UI_COR_BORDA_TOQUE);
+
+        const int16_t comprimento = static_cast<int16_t>(std::strlen(rotulo));
+        uint8_t fonte = fonteBase;
+        while (fonte > 1 && comprimento * 6 * fonte + 1 > larguraTecla - 4) fonte--;
+        g.setTextSize(fonte);
+        g.setTextColor(selecionado ? COR_TEXTO_SELECIONADO : COR_TEXTO, corFundoTecla);
+        const int16_t larguraTexto = static_cast<int16_t>(comprimento * 6 * fonte);
+        imprimirTexto(g, ox + (largCelula - larguraTexto) / 2, oy + (altCelula - 8 * fonte) / 2,
+                      rotulo);
+      });
+    }
+
+    registrarZona(x + UI_TECLADO_FOLGA_TOQUE, y + UI_TECLADO_FOLGA_TOQUE,
+                  largCelula - 2 * UI_TECLADO_FOLGA_TOQUE, altCelula - 2 * UI_TECLADO_FOLGA_TOQUE,
+                  AcaoToque::ItemLista, i);
+  }
 }
 
 void desenharMensagem(const char* titulo, const char* mensagem) {
   if (!displayOk) return;
   TravaBarramentoDisplay travaBus;
-
-  Serial.println("[IHM] Limpando tela em desenharMensagem()");
-  display->fillScreen(COR_FUNDO);
+  limparZonas();
+  ocuparConteudo(TipoConteudo::Esparso);
   desenharCabecalhoRodape(titulo);
 
-  const uint8_t fonte = layout::uiFontSize(1);
-  char buffer[64];
-  truncarTexto(buffer, sizeof(buffer), mensagem, display->width() - 2 * layout::uiMargin(), fonte);
+  if (telaEsparsaMudou(Assinatura().num(7).texto(titulo).texto(mensagem).valor())) {
+    limparConteudo(false);
 
-  display->setTextSize(fonte);
-  display->setTextColor(COR_VALOR);
-  imprimirTexto(layout::uiMargin(), layout::uiCenterY(), buffer);
-  display->flush();
+    const uint8_t fonte = layout::uiFontSize(1);
+    char buffer[80];
+    truncarTexto(buffer, sizeof(buffer), mensagem, tft.width() - 2 * layout::uiMargin(), fonte);
+
+    tft.setTextSize(fonte);
+    tft.setTextColor(COR_VALOR, COR_FUNDO);
+    imprimirTexto(layout::uiMargin(), layout::uiCenterY(), buffer);
+  }
+
+  desenharBotoesRodape(RotulosRodape{});
+}
+
+// A curva do grafico em si, a partir dos pontos JÁ COPIADOS para
+// graficoTempos/graficoValores, respeitando graficoZoom/graficoCentro.
+void desenharCurvaGrafico() {
+  limparConteudo(false);
+
+  const uint8_t fonte = layout::uiFontSize(1);
+
+  if (graficoQuantidade == 0) {
+    tft.setTextSize(fonte);
+    tft.setTextColor(COR_TEXTO, COR_FUNDO);
+    imprimirTexto(layout::uiMargin(), layout::uiCenterY(), "Sem dados suficientes");
+    return;
+  }
+
+  float minT = graficoTempos[0];
+  float maxT = graficoTempos[0];
+  for (uint8_t i = 1; i < graficoQuantidade; i++) {
+    if (graficoTempos[i] < minT) minT = graficoTempos[i];
+    if (graficoTempos[i] > maxT) maxT = graficoTempos[i];
+  }
+  // Evita divisao por zero quando todos os pontos tem o mesmo tempo (ex.:
+  // um unico ponto) — nesse caso a serie vira uma linha reta.
+  const float faixaTotalT = (maxT > minT) ? (maxT - minT) : 1.0f;
+
+  // Janela visível: com zoom 1 é a série inteira; a cada zoom a janela
+  // encolhe pela metade em torno de graficoCentro. O centro é preso às
+  // bordas para a janela nunca sair da faixa de dados — sem isso, arrastar
+  // até o fim deixaria a tela vazia.
+  const float larguraJanela = faixaTotalT / graficoZoom;
+  float t0 = minT + graficoCentro * faixaTotalT - larguraJanela / 2.0f;
+  if (t0 < minT) t0 = minT;
+  if (t0 > maxT - larguraJanela) t0 = maxT - larguraJanela;
+  const float t1 = t0 + larguraJanela;
+
+  // Escala do eixo Y recalculada para os pontos VISÍVEIS: ampliar um trecho
+  // e continuar usando a escala da série inteira achataria justamente o
+  // detalhe que o usuário ampliou para ver.
+  bool achouVisivel = false;
+  float minY = 0.0f, maxY = 0.0f;
+  for (uint8_t i = 0; i < graficoQuantidade; i++) {
+    if (graficoTempos[i] < t0 || graficoTempos[i] > t1) continue;
+    if (!achouVisivel) {
+      minY = maxY = graficoValores[i];
+      achouVisivel = true;
+    } else {
+      if (graficoValores[i] < minY) minY = graficoValores[i];
+      if (graficoValores[i] > maxY) maxY = graficoValores[i];
+    }
+  }
+  if (!achouVisivel) {
+    minY = 0.0f;
+    maxY = 1.0f;
+  }
+  const float faixaY = (maxY > minY) ? (maxY - minY) : 1.0f;
+
+  const int16_t plotX0 = layout::uiMargin();
+  const int16_t plotX1 = tft.width() - layout::uiMargin();
+  const int16_t plotY0 = layout::uiHeaderHeight() + layout::uiMargin();
+  const int16_t plotY1 = tft.height() - layout::uiFooterHeight() - layout::uiMargin();
+  const int16_t plotLargura = plotX1 - plotX0;
+  const int16_t plotAltura = plotY1 - plotY0;
+  if (plotLargura <= 1 || plotAltura <= 1) return;
+
+  // Linha de referencia em y=0 — só desenhada quando o zero cai dentro da
+  // faixa observada (útil pra ver troca de sinal, ex.: aceleração negativa).
+  if (minY < 0.0f && maxY > 0.0f) {
+    const int16_t yZero = plotY1 - static_cast<int16_t>((0.0f - minY) / faixaY * (plotAltura - 1));
+    tft.drawFastHLine(plotX0, yZero, plotLargura, COR_RODAPE);
+  }
+
+  int16_t xAnterior = 0;
+  int16_t yAnterior = 0;
+  bool temAnterior = false;
+  for (uint8_t i = 0; i < graficoQuantidade; i++) {
+    if (graficoTempos[i] < t0 || graficoTempos[i] > t1) {
+      temAnterior = false;  // saiu da janela: não liga por cima do corte
+      continue;
+    }
+    const int16_t x =
+        plotX0 + static_cast<int16_t>((graficoTempos[i] - t0) / larguraJanela * (plotLargura - 1));
+    const int16_t y =
+        plotY1 - static_cast<int16_t>((graficoValores[i] - minY) / faixaY * (plotAltura - 1));
+    if (temAnterior) {
+      tft.drawLine(xAnterior, yAnterior, x, y, COR_VALOR);
+    }
+    tft.fillRect(x - 1, y - 1, 3, 3, COR_VALOR);
+    xAnterior = x;
+    yAnterior = y;
+    temAnterior = true;
+  }
+
+  // Valores minimo/maximo do eixo Y, nos cantos superior/inferior esquerdos
+  // da area do grafico. Com zoom > 1 mostra tambem a janela de tempo, senão
+  // não haveria como saber que trecho da série está na tela. O rotulo de
+  // baixo fica rente ao fim da area do grafico (8px de fonte acima de
+  // plotY1), e nao uma linha de lista acima: com as linhas de 42px ele
+  // flutuava no meio da curva.
+  char bufMax[12];
+  char bufMin[12];
+  snprintf(bufMax, sizeof(bufMax), "%.2f", static_cast<double>(maxY));
+  snprintf(bufMin, sizeof(bufMin), "%.2f", static_cast<double>(minY));
+  tft.setTextSize(fonte);
+  tft.setTextColor(COR_RODAPE, COR_FUNDO);
+  imprimirTexto(plotX0 + 1, plotY0, bufMax);
+  imprimirTexto(plotX0 + 1, plotY1 - 8 * fonte, bufMin);
+
+  if (graficoZoom > 1.0f) {
+    char bufJanela[32];
+    snprintf(bufJanela, sizeof(bufJanela), "%.2f-%.2fs  %.0fx", static_cast<double>(t0),
+             static_cast<double>(t1), static_cast<double>(graficoZoom));
+    const int16_t larguraJanelaTexto = static_cast<int16_t>(std::strlen(bufJanela) * 6 * fonte);
+    imprimirTexto(plotX1 - larguraJanelaTexto - 2, plotY0, bufJanela);
+  }
+}
+
+// Fica fora do namespace anônimo (foi declarada lá em cima) porque os
+// gestos de zoom e arrasto, tratados em atualizarToque(), precisam
+// redesenhar sem passar pela máquina de estados: zoom é mudança de
+// visualização, não de estado do firmware.
+void desenharGraficoInterno() {
+  if (!displayOk) return;
+  limparZonas();
+  graficoAtivo = true;
+  ocuparConteudo(TipoConteudo::Esparso);
+  desenharCabecalhoRodape(graficoTitulo);
+
+  Assinatura assinatura;
+  assinatura.num(8)
+      .texto(graficoTitulo)
+      .num(graficoQuantidade)
+      .bytes(&graficoZoom, sizeof(graficoZoom))
+      .bytes(&graficoCentro, sizeof(graficoCentro))
+      .bytes(graficoTempos, graficoQuantidade * sizeof(graficoTempos[0]))
+      .bytes(graficoValores, graficoQuantidade * sizeof(graficoValores[0]));
+  if (telaEsparsaMudou(assinatura.valor())) desenharCurvaGrafico();
+
+  RotulosRodape rodapeGrafico;
+  rodapeGrafico.anterior = "-";
+  rodapeGrafico.proximo = "+";
+  rodapeGrafico.acaoAnterior = AcaoToque::ZoomMenos;
+  rodapeGrafico.acaoProximo = AcaoToque::ZoomMais;
+  desenharBotoesRodape(rodapeGrafico);
 }
 
 void desenharGrafico(const char* titulo, const float* temposS, const float* valoresY, uint8_t quantidade) {
   if (!displayOk) return;
   TravaBarramentoDisplay travaBus;
 
-  Serial.println("[IHM] Limpando tela em desenharGrafico()");
-  display->fillScreen(COR_FUNDO);
-  desenharCabecalhoRodape(titulo, "KEY: voltar");
-
-  const uint8_t fonte = layout::uiFontSize(1);
-
-  if (quantidade == 0 || temposS == nullptr || valoresY == nullptr) {
-    display->setTextSize(fonte);
-    display->setTextColor(COR_TEXTO);
-    imprimirTexto(layout::uiMargin(), layout::uiCenterY(), "Sem dados suficientes");
-    display->flush();
-    return;
-  }
-
-  float minY = valoresY[0];
-  float maxY = valoresY[0];
-  float minT = temposS[0];
-  float maxT = temposS[0];
-  for (uint8_t i = 1; i < quantidade; i++) {
-    if (valoresY[i] < minY) minY = valoresY[i];
-    if (valoresY[i] > maxY) maxY = valoresY[i];
-    if (temposS[i] < minT) minT = temposS[i];
-    if (temposS[i] > maxT) maxT = temposS[i];
-  }
-  // Evita divisao por zero quando todos os pontos tem o mesmo valor/tempo
-  // (ex.: um unico ponto) — nesse caso a serie fica desenhada como uma
-  // linha reta no meio da area do grafico.
-  const float faixaY = (maxY > minY) ? (maxY - minY) : 1.0f;
-  const float faixaT = (maxT > minT) ? (maxT - minT) : 1.0f;
-
-  const int16_t plotX0 = layout::uiMargin();
-  const int16_t plotX1 = display->width() - layout::uiMargin();
-  const int16_t plotY0 = layout::uiHeaderHeight() + layout::uiMargin();
-  const int16_t plotY1 = display->height() - layout::uiFooterHeight() - layout::uiMargin();
-  const int16_t plotLargura = plotX1 - plotX0;
-  const int16_t plotAltura = plotY1 - plotY0;
-  if (plotLargura <= 1 || plotAltura <= 1) {
-    display->flush();
-    return;
-  }
-
-  // Linha de referencia em y=0 — só desenhada quando o zero cai dentro da
-  // faixa observada (útil pra ver troca de sinal, ex.: aceleração negativa).
-  if (minY < 0.0f && maxY > 0.0f) {
-    const int16_t yZero = plotY1 - static_cast<int16_t>((0.0f - minY) / faixaY * (plotAltura - 1));
-    display->drawFastHLine(plotX0, yZero, plotLargura, COR_RODAPE);
-  }
-
-  int16_t xAnterior = 0;
-  int16_t yAnterior = 0;
-  for (uint8_t i = 0; i < quantidade; i++) {
-    const int16_t x = plotX0 + static_cast<int16_t>((temposS[i] - minT) / faixaT * (plotLargura - 1));
-    const int16_t y = plotY1 - static_cast<int16_t>((valoresY[i] - minY) / faixaY * (plotAltura - 1));
-    if (i > 0) {
-      display->drawLine(xAnterior, yAnterior, x, y, COR_VALOR);
+  // Copia os pontos em vez de guardar os ponteiros: os gestos redesenham o
+  // gráfico depois, fora do ciclo da máquina de estados, e a essa altura os
+  // vetores de analise_linear/analise_circular podem já não valer mais.
+  graficoQuantidade = 0;
+  if (temposS != nullptr && valoresY != nullptr) {
+    const uint16_t limite = (quantidade < MAX_PONTOS_GRAFICO) ? quantidade : MAX_PONTOS_GRAFICO;
+    for (uint16_t i = 0; i < limite; i++) {
+      graficoTempos[i] = temposS[i];
+      graficoValores[i] = valoresY[i];
     }
-    display->fillRect(x - 1, y - 1, 3, 3, COR_VALOR);
-    xAnterior = x;
-    yAnterior = y;
+    graficoQuantidade = static_cast<uint8_t>(limite);
   }
 
-  // Valores minimo/maximo do eixo Y, nos cantos superior/inferior esquerdos
-  // da area do grafico (unica indicacao numerica da escala vertical — o
-  // eixo X so precisa caber a serie inteira, sem rotulo numerico, dado o
-  // pouco espaco do display).
-  char bufMax[12];
-  char bufMin[12];
-  snprintf(bufMax, sizeof(bufMax), "%.2f", static_cast<double>(maxY));
-  snprintf(bufMin, sizeof(bufMin), "%.2f", static_cast<double>(minY));
-  display->setTextSize(fonte);
-  display->setTextColor(COR_RODAPE);
-  imprimirTexto(plotX0 + 1, plotY0, bufMax);
-  imprimirTexto(plotX0 + 1, plotY1 - layout::uiLineSpacing(), bufMin);
+  std::strncpy(graficoTitulo, titulo != nullptr ? titulo : "", sizeof(graficoTitulo) - 1);
+  graficoTitulo[sizeof(graficoTitulo) - 1] = '\0';
 
-  display->flush();
+  // Entrar na tela (ou trocar de repetição) sempre começa mostrando a série
+  // inteira: manter o zoom da visualização anterior deixaria o usuário
+  // olhando um pedaço arbitrário de uma curva que ele acabou de abrir.
+  graficoZoom = 1.0f;
+  graficoCentro = 0.5f;
+
+  desenharGraficoInterno();
 }
 
 bool desenharImagemBMP(const char* nomeComExtensao, int16_t x, int16_t y, int16_t larguraMaxima,
@@ -984,6 +2306,16 @@ bool desenharImagemBMP(const char* nomeComExtensao, int16_t x, int16_t y, int16_
   const bool origemTopoParaBase = (alturaBrutaOrigem < 0);
   const int32_t alturaOrigem = origemTopoParaBase ? -alturaBrutaOrigem : alturaBrutaOrigem;
 
+  // Relata o cabecalho lido. Sem isto, um arquivo com formato inesperado so
+  // se manifesta como "a cor saiu errada" ou "nao apareceu", sem dizer por
+  // que — e o arquivo no cartao nem sempre e o que esta no repositorio.
+  // bpp=24/32 e compressao=0 sao os unicos casos que este leitor decodifica.
+  Serial.printf("[BMP] %s: %ldx%ld, %u bits, compressao %u, dados em +%u, %s\n",
+                nomeComExtensao, static_cast<long>(larguraOrigem),
+                static_cast<long>(alturaOrigem), static_cast<unsigned>(bpp),
+                static_cast<unsigned>(compressao), static_cast<unsigned>(offsetDados),
+                origemTopoParaBase ? "topo-para-base" : "base-para-topo");
+
   // Só BI_RGB (sem compressão) de 24 ou 32 bits — cobre o caso comum de
   // exportação simples; qualquer outro formato cai no retrocesso do
   // chamador (texto), sem tentar decodificar.
@@ -998,8 +2330,7 @@ bool desenharImagemBMP(const char* nomeComExtensao, int16_t x, int16_t y, int16_
   const uint32_t passoLinha = ((static_cast<uint32_t>(larguraOrigem) * bytesPorPixel + 3) / 4) * 4;
 
   // Limite de sanidade: evita alocar um buffer de linha desproporcional
-  // (ex.: um BMP de altíssima resolução enviado por engano). Cobre
-  // confortavelmente imagens de até ~5000px de largura em 32 bits.
+  // (ex.: um BMP de altíssima resolução enviado por engano).
   constexpr uint32_t LIMITE_BYTES_LINHA = 20000;
   if (passoLinha > LIMITE_BYTES_LINHA) {
     Serial.printf("[IHM] BMP linha grande demais (%s): %u bytes (limite %u)\n", nomeComExtensao,
@@ -1008,40 +2339,75 @@ bool desenharImagemBMP(const char* nomeComExtensao, int16_t x, int16_t y, int16_
     return false;
   }
 
-  // Escala uniforme (preserva proporção), só reduz — nunca amplia além do
-  // tamanho original da imagem.
-  float escala = 1.0f;
-  if (larguraOrigem > larguraMaxima) escala = static_cast<float>(larguraOrigem) / larguraMaxima;
-  if ((alturaOrigem / escala) > alturaMaxima) escala = static_cast<float>(alturaOrigem) / alturaMaxima;
+  // TAMANHO ORIGINAL, 1:1 — a imagem so e reduzida se nao couber na caixa.
+  //
+  // Ampliar por vizinho-mais-proximo (o unico metodo viavel aqui) nao cria
+  // detalhe: duplica pixels, e o resultado e uma logo maior porem serrilhada
+  // e borrada. Como as logos ja vem no tamanho que o projeto quer
+  // (160x128 e 164x52), desenha-las 1:1 e o que preserva a nitidez.
+  //
+  // escala > 1 reduz; 1.0 desenha pixel a pixel. Para ocupar mais tela, o
+  // caminho certo e exportar o BMP maior, nao ampliar aqui.
+  const float escalaLargura = static_cast<float>(larguraOrigem) / larguraMaxima;
+  const float escalaAltura = static_cast<float>(alturaOrigem) / alturaMaxima;
+  float escala = (escalaLargura > escalaAltura) ? escalaLargura : escalaAltura;
+  if (escala < 1.0f) escala = 1.0f;  // nunca amplia
 
-  const int16_t larguraSaida = static_cast<int16_t>(larguraOrigem / escala);
-  const int16_t alturaSaida = static_cast<int16_t>(alturaOrigem / escala);
+  int16_t larguraSaida = static_cast<int16_t>(larguraOrigem / escala);
+  int16_t alturaSaida = static_cast<int16_t>(alturaOrigem / escala);
+  // Arredondamento pode estourar a caixa em 1px; prende nos limites.
+  if (larguraSaida > larguraMaxima) larguraSaida = larguraMaxima;
+  if (alturaSaida > alturaMaxima) alturaSaida = alturaMaxima;
+  if (larguraSaida < 1 || alturaSaida < 1) {
+    armazenamento::fecharBinario();
+    return false;
+  }
+
   const int16_t xCentralizado = x + (larguraMaxima - larguraSaida) / 2;
   const int16_t yCentralizado = y + (alturaMaxima - alturaSaida) / 2;
 
+  // Desenho LINHA A LINHA, sem framebuffer da imagem inteira.
+  //
+  // A versão anterior lia a imagem toda para a RAM antes de desenhar, por um
+  // motivo que deixou de existir: naquela época alternar o dono do barramento
+  // (SD <-> display) a cada linha corrompia o cartão, porque o display era
+  // bit-bang e o SD era SPI de hardware nos mesmos pinos. Hoje os dois usam o
+  // mesmo periférico e só alternam o CS, então intercalar leitura e desenho
+  // por linha é seguro.
+  //
+  // E passou a ser necessário: ampliando para a tela cheia, aquele buffer
+  // seria 320*240*2 = 150KB de RAM interna — inviável ao lado do NimBLE.
+  // Assim são ~1,3KB (uma linha de origem + uma de destino).
   uint8_t* linhaOrigem = static_cast<uint8_t*>(malloc(passoLinha));
-  // Buffer da imagem de SAÍDA inteira (não só uma linha): lemos todas as
-  // linhas do SD primeiro e só depois desenhamos tudo de uma vez no TFT.
-  // Alternar dono do barramento (SD <-> display) a cada linha — mesmo só
-  // reconfigurando fisicamente quando o dono muda — ainda significava até
-  // duas trocas por linha (centenas por imagem); isso corrompeu o cartão
-  // na prática (falhas repetidas de CMD13/SEND_STATUS). Com o buffer
-  // completo, a troca acontece só 2 vezes no total: uma vez para ler tudo,
-  // uma vez para desenhar tudo.
-  uint16_t* framebuffer = static_cast<uint16_t*>(
-      malloc(static_cast<size_t>(larguraSaida) * static_cast<size_t>(alturaSaida) * sizeof(uint16_t)));
-  if (linhaOrigem == nullptr || framebuffer == nullptr) {
-    Serial.println("[IHM] BMP: sem memoria para buffer de imagem");
+  uint16_t* linhaSaida =
+      static_cast<uint16_t*>(malloc(static_cast<size_t>(larguraSaida) * sizeof(uint16_t)));
+  if (linhaOrigem == nullptr || linhaSaida == nullptr) {
+    Serial.println("[IHM] BMP: sem memoria para buffer de linha");
     free(linhaOrigem);
-    free(framebuffer);
+    free(linhaSaida);
     armazenamento::fecharBinario();
     return false;
   }
 
   Serial.printf("[IHM] Lendo BMP %s do SD (%ldx%ld -> %dx%d)\n", nomeComExtensao,
-                static_cast<long>(larguraOrigem), static_cast<long>(alturaOrigem), larguraSaida, alturaSaida);
+                static_cast<long>(larguraOrigem), static_cast<long>(alturaOrigem), larguraSaida,
+                alturaSaida);
+
+  // Limpa a área de destino ANTES de desenhar: a imagem é centralizada
+  // preservando a proporção, então uma imagem com proporção diferente da
+  // anterior pode não cobrir toda a área, deixando sobras visíveis nas bordas.
+  {
+    TravaBarramentoDisplay travaBus;
+    invalidarCacheTela();
+    tft.fillRect(x, y, larguraMaxima, alturaMaxima, COR_FUNDO);
+  }
 
   bool leituraCompleta = true;
+  // Ao ampliar, várias linhas de saída vêm da MESMA linha de origem. Guardar
+  // qual está no buffer evita reler e reconverter a mesma linha do cartão —
+  // numa ampliação de 2x isso corta metade dos acessos ao SD.
+  int32_t linhaOrigemEmBuffer = -1;
+
   for (int16_t linhaSaidaIdx = 0; linhaSaidaIdx < alturaSaida; linhaSaidaIdx++) {
     const int32_t linhaOrigemIdx = static_cast<int32_t>(linhaSaidaIdx * escala);
     // BMP padrão é bottom-up: a primeira linha do arquivo é a ÚLTIMA linha
@@ -1049,45 +2415,44 @@ bool desenharImagemBMP(const char* nomeComExtensao, int16_t x, int16_t y, int16_
     // top-down (já na ordem de exibição).
     const int32_t linhaArquivo =
         origemTopoParaBase ? linhaOrigemIdx : (alturaOrigem - 1 - linhaOrigemIdx);
-    const uint32_t offsetLinha = offsetDados + static_cast<uint32_t>(linhaArquivo) * passoLinha;
 
-    if (!armazenamento::posicionarBinario(offsetLinha) ||
-        armazenamento::lerBinario(linhaOrigem, passoLinha) != passoLinha) {
-      Serial.println("[IHM] BMP: falha de leitura no meio do arquivo, interrompendo");
-      leituraCompleta = false;
-      break;
+    if (linhaArquivo != linhaOrigemEmBuffer) {
+      const uint32_t offsetLinha = offsetDados + static_cast<uint32_t>(linhaArquivo) * passoLinha;
+      // Fora de qualquer TravaBarramentoDisplay: estas funções tomam o mesmo
+      // mutex internamente, e ele não é recursivo — segurá-lo aqui travaria
+      // o firmware.
+      if (!armazenamento::posicionarBinario(offsetLinha) ||
+          armazenamento::lerBinario(linhaOrigem, passoLinha) != passoLinha) {
+        Serial.println("[IHM] BMP: falha de leitura no meio do arquivo, interrompendo");
+        leituraCompleta = false;
+        break;
+      }
+      linhaOrigemEmBuffer = linhaArquivo;
+
+      for (int16_t colunaSaidaIdx = 0; colunaSaidaIdx < larguraSaida; colunaSaidaIdx++) {
+        int32_t colunaOrigemIdx = static_cast<int32_t>(colunaSaidaIdx * escala);
+        if (colunaOrigemIdx >= larguraOrigem) colunaOrigemIdx = larguraOrigem - 1;
+        const uint8_t* pixel = linhaOrigem + static_cast<uint32_t>(colunaOrigemIdx) * bytesPorPixel;
+        // BMP grava os bytes em BGR(A). A conversao para RGB565 passa pela
+        // MESMA funcao cor() que a paleta da interface usa, entao a ordem
+        // escolhida em UI_ORDEM_CANAIS (MAIN.HPP) vale para a imagem
+        // tambem — imagem e interface nunca discordam de cor.
+        const uint32_t rgb = (static_cast<uint32_t>(pixel[2]) << 16) |
+                             (static_cast<uint32_t>(pixel[1]) << 8) |
+                             static_cast<uint32_t>(pixel[0]);
+        linhaSaida[colunaSaidaIdx] = cor(rgb);
+      }
     }
 
-    uint16_t* linhaSaidaBuffer = framebuffer + static_cast<size_t>(linhaSaidaIdx) * larguraSaida;
-    for (int16_t colunaSaidaIdx = 0; colunaSaidaIdx < larguraSaida; colunaSaidaIdx++) {
-      const int32_t colunaOrigemIdx = static_cast<int32_t>(colunaSaidaIdx * escala);
-      const uint8_t* pixel = linhaOrigem + static_cast<uint32_t>(colunaOrigemIdx) * bytesPorPixel;
-      // BMP grava BGR(A); RGB565 = RRRRR GGGGGG BBBBB.
-      const uint8_t azul = pixel[0];
-      const uint8_t verde = pixel[1];
-      const uint8_t vermelho = pixel[2];
-      linhaSaidaBuffer[colunaSaidaIdx] = static_cast<uint16_t>(((vermelho & 0xF8) << 8) |
-                                                                ((verde & 0xFC) << 3) | (azul >> 3));
-    }
+    TravaBarramentoDisplay travaBus;
+    tft.pushImage(xCentralizado, yCentralizado + linhaSaidaIdx, larguraSaida, 1, linhaSaida);
   }
 
   free(linhaOrigem);
+  free(linhaSaida);
   armazenamento::fecharBinario();
-
-  if (leituraCompleta) {
-    Serial.printf("[IHM] Desenhando BMP %s (leitura completa)\n", nomeComExtensao);
-    TravaBarramentoDisplay travaBus;
-    // Limpa a área de destino ANTES de desenhar: a imagem é centralizada
-    // sem nunca ampliar (preserva proporção), então uma imagem com
-    // proporção diferente da anterior pode não cobrir toda a área,
-    // deixando sobras da imagem/tela anterior visíveis nas bordas (ex.:
-    // a logo da UFRN "sobrepondo" a da Monkey Tech na inicialização).
-    display->fillRect(x, y, larguraMaxima, alturaMaxima, COR_FUNDO);
-    display->draw16bitRGBBitmap(xCentralizado, yCentralizado, framebuffer, larguraSaida, alturaSaida);
-    display->flush();
-  }
-
-  free(framebuffer);
+  Serial.printf("[BMP] %s: desenho %s\n", nomeComExtensao,
+                leituraCompleta ? "completo" : "INTERROMPIDO");
   return leituraCompleta;
 }
 

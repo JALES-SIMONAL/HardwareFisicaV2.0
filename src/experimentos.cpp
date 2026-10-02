@@ -225,7 +225,7 @@ void finalizarRepeticaoAtual() {
     // Assíncrono de propósito (ver comentário grande em
     // armazenamento::solicitarFechamentoArquivo()): esta função roda no
     // núcleo 1 (IHM/Bluetooth) — chamar a versão bloqueante
-    // (fecharArquivoAtual()) aqui podia travar a tela/encoder/BLE inteiros
+    // (fecharArquivoAtual()) aqui podia travar a tela/touch/BLE inteiros
     // por tempo indeterminado sempre que o núcleo 0 estivesse no meio de
     // uma escrita lenta no cartão SD, exatamente o bug de "trava ao
     // finalizar repetição" relatado. O fechamento de verdade acontece no

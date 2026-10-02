@@ -7,16 +7,33 @@
 // rotação ou proporção do display alterando apenas estas constantes.
 namespace layout {
 
-// Resolução de referência usada para desenhar o layout original.
+// Resolução de referência usada para desenhar o layout original (o ST7735
+// 128x160 da versão anterior). Mantida de propósito mesmo com o painel
+// atual sendo 320x240: é ela que preserva as PROPORÇÕES do desenho
+// original — margens, altura de cabeçalho e espaçamento continuam com o
+// mesmo peso visual, só que escalados. Trocar o painel não deve mudar o
+// desenho, só o tamanho.
 constexpr int16_t UI_REFERENCE_WIDTH = 128;
 constexpr int16_t UI_REFERENCE_HEIGHT = 160;
 
-// Rotação inicial do display (mesma convenção do Arduino_GFX_Library).
-constexpr uint8_t UI_REFERENCE_ROTATION = 1;
+// Rotação inicial do display. 2 = paisagem virada 180 graus, para o módulo
+// montado de cabeça para baixo. A rotação 0 deste painel (ILI9342) já é
+// paisagem, porque ele é deitado por natureza — ver o bloco do driver no
+// platformio.ini. Na versão anterior era 1, porque o ST7735 era retrato e
+// precisava ser girado.
+//
+// Tem de acompanhar ROTACAO_DISPLAY em ihm.cpp: os dois descrevem a mesma
+// tela, e divergirem faria o layout ser calculado para uma orientação
+// diferente da que o painel exibe.
+constexpr uint8_t UI_REFERENCE_ROTATION = 2;
 
 // Margens, cabeçalho/rodapé e espaçamento de referência (na resolução acima).
 constexpr int16_t UI_MARGIN = 4;
-constexpr int16_t UI_HEADER_HEIGHT = 28;
+// Reduzido de 28 para 20 junto com o aumento do alvo de toque: os botoes e
+// as linhas ficaram 30% mais altos, e sem devolver espaco em algum lugar
+// caberiam so 3 itens por tela. O cabecalho so precisa acomodar uma linha
+// de titulo, entao e de onde da para tirar sem custo de uso.
+constexpr int16_t UI_HEADER_HEIGHT = 20;
 constexpr int16_t UI_FOOTER_HEIGHT = 16;
 constexpr int16_t UI_LINE_SPACING = 12;
 

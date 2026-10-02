@@ -11,7 +11,7 @@ namespace configuracoes {
 namespace {
 
 // Comparação sem diferenciar maiúsculas/minúsculas: o editor de texto local
-// (encoder) só produz letras maiúsculas (ver ALFABETO_NOME em
+// (teclado de toque) só produz letras maiúsculas (ver ALFABETO_NOME em
 // maquina_estados.cpp), então a senha padrão "fisica123" (minúscula, como
 // definida pelo app) precisa continuar validando mesmo digitada
 // "FISICA123" no equipamento.

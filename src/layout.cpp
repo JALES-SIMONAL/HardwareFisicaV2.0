@@ -75,14 +75,31 @@ int16_t uiHeaderHeight() {
   return std::max<int16_t>(uiHeight(UI_HEADER_HEIGHT), alturaFonte + 8);
 }
 
+// O rodapé deixou de ser uma linha de dica e passou a ser a barra de quatro
+// botões tocáveis (ihm.cpp) — por isso ele também respeita o piso de alvo
+// de toque, senão os botões nasceriam altos demais para o texto e baixos
+// demais para o dedo.
 int16_t uiFooterHeight() {
   const int16_t alturaFonte = 8 * static_cast<int16_t>(uiFontSize(1));
-  return std::max<int16_t>(uiHeight(UI_FOOTER_HEIGHT), alturaFonte + 6);
+  return std::max<int16_t>({uiHeight(UI_FOOTER_HEIGHT), static_cast<int16_t>(alturaFonte + 6),
+                            UI_ALTURA_MINIMA_ALVO_TOQUE});
 }
 
+// PISO DE ALVO DE TOQUE — a única mudança estrutural de layout em relação à
+// versão com encoder. Lá, uma linha de lista de 12px era perfeitamente
+// utilizável: a seleção vinha do giro, e o único requisito da linha era ser
+// legível. Aqui a linha também precisa ser ACERTÁVEL por um dedo, e abaixo
+// de ~30px o usuário erra a linha vizinha o tempo todo num touch resistivo.
+//
+// O piso é aplicado só ao espaçamento, nunca ao tamanho da fonte: o texto
+// continua exatamente do tamanho proporcional que o desenho original
+// pediria, só ganha espaço em volta. O custo é real e vale registrar —
+// menos itens cabem por tela (aqui: 5 em vez dos ~7 da tela antiga), então
+// menus longos rolam mais.
 int16_t uiLineSpacing() {
   const int16_t alturaFonte = 8 * static_cast<int16_t>(uiFontSize(1));
-  return std::max<int16_t>(uiHeight(UI_LINE_SPACING), alturaFonte + 4);
+  return std::max<int16_t>({uiHeight(UI_LINE_SPACING), static_cast<int16_t>(alturaFonte + 4),
+                            UI_ALTURA_MINIMA_ALVO_TOQUE});
 }
 
 uint8_t uiItensVisiveis() {

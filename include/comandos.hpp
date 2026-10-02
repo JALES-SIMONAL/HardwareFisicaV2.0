@@ -2,7 +2,7 @@
 
 #include <stdint.h>
 
-// Vocabulário de comandos compartilhado entre a entrada local (encoder/tecla
+// Vocabulário de comandos compartilhado entre a entrada local (tela touch
 // KEY) e a entrada remota (Bluetooth). Ambas as origens convertem sua
 // entrada para o mesmo Command e chamam a mesma função da máquina de
 // estados — não existe lógica de funcionamento separada para o aplicativo.
@@ -53,7 +53,11 @@ enum class CommandType : uint8_t {
   // acendiam, porque quem os aciona é atualizarTelasAoVivo() em
   // maquina_estados.cpp, condicionado só à tela LOCAL — ver
   // testeCanaisAtivoRemoto.
-  SetChannelTestActive
+  SetChannelTestActive,
+  // Recalibrar o toque a partir do app — o mesmo "Recalibrar toque" do menu
+  // de configurações local. Útil justamente quando a calibração ficou tão
+  // ruim que não dá mais para chegar no item pela própria tela.
+  CalibrateTouch
 };
 
 enum class Origem : uint8_t { Local, Bluetooth };
@@ -61,7 +65,7 @@ enum class Origem : uint8_t { Local, Bluetooth };
 // Estrutura mínima e genérica: cada CommandType usa só os campos relevantes.
 struct Command {
   CommandType tipo = CommandType::None;
-  int32_t valor = 0;        // deltas de encoder, brilho/volume, repetições...
+  int32_t valor = 0;        // deltas de navegação, brilho/volume, repetições...
   uint8_t canal = 0;        // índice do canal (1..NUM_CHANNELS) quando aplicável
   EdgeMode modo = EdgeMode::Both;
   // 25 = maior nome de arquivo possível (20 digitáveis no editor da IHM +

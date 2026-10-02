@@ -93,7 +93,7 @@ void desenharLogoMonkeyTech() {
   const int16_t altura = layout::uiHeight(layout::UI_REFERENCE_HEIGHT);
   if (!ihm::desenharImagemBMP("Monkey Tech.bmp", 0, 0, largura, altura)) {
     ihm::escreverTextoTela("Monkey Tech", layout::uiMargin(), layout::uiHeight(40),
-                            0xFFFF, layout::uiFontSize(1), true);
+                            UI_COR_TEXTO_PRINCIPAL, layout::uiFontSize(1), true);
   }
 }
 
@@ -108,9 +108,9 @@ void desenharLogoUFRN() {
 
 void desenharTelaDesenvolvedor() {
   ihm::escreverTextoTela("Desenvolvido por", layout::uiMargin(), layout::uiHeight(60),
-                          0xFFFF, layout::uiFontSize(1), true);
+                          UI_COR_TEXTO_PRINCIPAL, layout::uiFontSize(1), true);
   ihm::escreverTextoTela("Wilson Simonal", layout::uiMargin(), layout::uiHeight(76),
-                          0xFFE0, layout::uiFontSize(1), false);
+                          UI_COR_TERCIARIA, layout::uiFontSize(1), false);
 }
 
 // Usa ihm::controlarTodosLeds() (um único pixels.show() ao final) — nunca
@@ -140,6 +140,43 @@ bool precisaRedesenhar = false;
 // conectado) mas os LEDs físicos nunca reagiam a um teste iniciado só pelo
 // app. Ver atualizarTelasAoVivo() e aoDesconectarBluetooth().
 bool testeCanaisAtivoRemoto = false;
+
+// true entre o app pedir "calibrate_touch" e tick() executar a calibração.
+// O comando NAO calibra na hora: ele chega por bluetooth_app::loop(), que
+// segura o mutex do Bluetooth enquanto processa a fila — e a calibração
+// bloqueia por segundos esperando os 4 toques. Feita ali, prenderia o mutex
+// esse tempo todo e travaria publicarEvento() na tarefa de aquisição.
+bool calibracaoToquePendente = false;
+
+// Por que o app não pode calibrar agora, ou nullptr se pode. Mesmo
+// critério do item local "Recalibrar toque", mais as checagens que o menu
+// local dispensa por só existir com tela e toque funcionando.
+const char* motivoRecusaCalibracaoToque() {
+  if (experimentos::emAndamento()) return "experimento";
+  if (!ihm::displayDisponivel()) return "sem_display";
+  // toqueDisponivel() só é false aqui se o XPT2046 não respondeu no boot:
+  // calibrar seria esperar para sempre um toque que nunca chega.
+  if (!ihm::toqueDisponivel()) return "sem_toque";
+  return nullptr;
+}
+
+void executarCalibracaoToquePendente() {
+  if (!calibracaoToquePendente) return;
+  calibracaoToquePendente = false;
+
+  // Rechecado: comandos que chegaram no mesmo lote, depois do
+  // "calibrate_touch" (ex.: start_experiment), já foram processados.
+  const char* motivo = motivoRecusaCalibracaoToque();
+  if (motivo != nullptr) {
+    bluetooth_app::publicarCalibracaoToque("recusada", motivo);
+    return;
+  }
+
+  Serial.println("[TOUCH] Calibracao pedida pelo app");
+  ihm::calibrarToque();
+  bluetooth_app::publicarCalibracaoToque("concluida");
+  precisaRedesenhar = true;
+}
 
 // Pilha de navegação: cada navegarPara() empilha a tela de origem; cada
 // voltarUmNivel() desempilha. Substitui um antigo campo único "tela
@@ -175,9 +212,10 @@ constexpr uint8_t QTD_EXPERIMENTOS = 4;
 // ja tinha esse acesso.
 constexpr const char* ITENS_CONFIGURACOES[] = {
     "Conexao com app",  "Modo de operacao", "Brilho da tela",       "Volume",
-    "Config. canais/sensores", "Manual",    "Sobre", "Analise de dados", "Voltar",
+    "Config. canais/sensores", "Manual",    "Sobre", "Analise de dados",
+    "Recalibrar toque", "Voltar",
 };
-constexpr uint8_t QTD_CONFIGURACOES = 9;
+constexpr uint8_t QTD_CONFIGURACOES = 10;
 // Índice de "Analise de dados" em ITENS_CONFIGURACOES — usado por
 // redesenharConfiguracoes() para acrescentar "ON"/"OFF" ao rótulo (o
 // usuário não tinha como saber o estado atual sem entrar no item).
@@ -697,10 +735,19 @@ void tratarExperimentoRepeticoes(const Command& cmd) {
       break;
     }
     case CommandType::Back:
-      // Sai da edição, volta ao seletor (não à tela anterior) — igual ao
-      // padrão de Brilho/Volume.
-      edicaoValor.emEdicao = false;
-      precisaRedesenhar = true;
+      // Back cancela o nivel MAIS INTERNO: com a edicao aberta, sai dela e
+      // volta ao seletor; sem edicao aberta, volta de tela.
+      //
+      // Antes so fazia a primeira metade, e fora do modo de edicao o Back
+      // caia no vazio — com o encoder isso nunca aparecia (ele nao gerava
+      // Back), mas com o botao "<" do rodape a tela virava um beco sem
+      // saida pelo toque.
+      if (edicaoValor.emEdicao) {
+        edicaoValor.emEdicao = false;
+        precisaRedesenhar = true;
+      } else {
+        voltarUmNivel();
+      }
       break;
     default:
       break;
@@ -1216,8 +1263,19 @@ void tratarAnaliseLinearDistancia(const Command& cmd) {
       break;
     }
     case CommandType::Back:
-      edicaoValor.emEdicao = false;
-      precisaRedesenhar = true;
+      // Back cancela o nivel MAIS INTERNO: com a edicao aberta, sai dela e
+      // volta ao seletor; sem edicao aberta, volta de tela.
+      //
+      // Antes so fazia a primeira metade, e fora do modo de edicao o Back
+      // caia no vazio — com o encoder isso nunca aparecia (ele nao gerava
+      // Back), mas com o botao "<" do rodape a tela virava um beco sem
+      // saida pelo toque.
+      if (edicaoValor.emEdicao) {
+        edicaoValor.emEdicao = false;
+        precisaRedesenhar = true;
+      } else {
+        voltarUmNivel();
+      }
       break;
     default:
       break;
@@ -1544,6 +1602,62 @@ void tratarTelaEmConstrucao(const Command& cmd) {
   }
 }
 
+// Linhas de texto da tela "Sobre" (ver redesenharSobre()).
+constexpr uint8_t QTD_LINHAS_SOBRE = 9;
+
+// "Sobre" tem mais linhas do que cabem na tela e antes caia em
+// tratarTelaEmConstrucao(), que ignora Next/Previous: as ultimas linhas
+// (BT, SD...) nunca apareciam. Agora ^ v e o arrasto rolam o texto, e a
+// barra de rolagem mostra onde se esta.
+void tratarSobre(const Command& cmd) {
+  const uint8_t visiveis = ihm::linhasVisiveisListaRolavel();
+  const uint8_t offsetMaximo =
+      (QTD_LINHAS_SOBRE > visiveis) ? static_cast<uint8_t>(QTD_LINHAS_SOBRE - visiveis) : 0;
+  switch (cmd.tipo) {
+    case CommandType::Next:
+      if (estado.offsetRolagem < offsetMaximo) {
+        estado.offsetRolagem++;
+        precisaRedesenhar = true;
+      }
+      break;
+    case CommandType::Previous:
+      if (estado.offsetRolagem > 0) {
+        estado.offsetRolagem--;
+        precisaRedesenhar = true;
+      }
+      break;
+    case CommandType::Confirm:
+      voltarUmNivel();
+      break;
+    default:
+      break;
+  }
+}
+
+// "Teste de canais" lista os 6 canais + "Voltar", mais do que as 4 linhas
+// que cabem, e era desenhada com selecao e rolagem fixas em 0: C5, C6 e
+// Voltar ficavam fora da tela sem jeito de chegar a eles. Navega como
+// qualquer menu; so "Voltar" faz algo ao ser escolhido.
+void tratarTesteCanais(const Command& cmd) {
+  constexpr uint8_t QTD_ITENS = NUM_CHANNELS + 1;
+  switch (cmd.tipo) {
+    case CommandType::Next:
+      estado.indiceSelecionado = (estado.indiceSelecionado + 1) % QTD_ITENS;
+      precisaRedesenhar = true;
+      break;
+    case CommandType::Previous:
+      estado.indiceSelecionado =
+          (estado.indiceSelecionado == 0) ? QTD_ITENS - 1 : estado.indiceSelecionado - 1;
+      precisaRedesenhar = true;
+      break;
+    case CommandType::Confirm:
+      if (estado.indiceSelecionado == NUM_CHANNELS) voltarUmNivel();
+      break;
+    default:
+      break;
+  }
+}
+
 void tratarConfiguracoes(const Command& cmd) {
   switch (cmd.tipo) {
     case CommandType::Next:
@@ -1565,7 +1679,18 @@ void tratarConfiguracoes(const Command& cmd) {
         case 5: navegarPara(Tela::Manual); break;
         case 6: navegarPara(Tela::Sobre); break;
         case 7: solicitarSenhaOuExecutar(AcaoAposSenha::AbrirToggleAnalise); break;
-        case 8: voltarUmNivel(); break;
+        case 8:
+          // Recalibra o toque. E bloqueante (espera o usuario tocar nos
+          // quatro cantos) e so pode ser chamada de uma tela parada como
+          // esta — nunca durante um experimento, que perderia eventos
+          // enquanto a calibracao segura o laco principal.
+          //
+          // Ao terminar, redesenha a tela atual: calibrarToque() escreve
+          // por cima de tudo e deixa a tela limpa.
+          ihm::calibrarToque();
+          precisaRedesenhar = true;
+          break;
+        case 9: voltarUmNivel(); break;
         default: break;
       }
       break;
@@ -2014,7 +2139,9 @@ void redesenharSobre() {
       linhaNome, linhaVersao, linhaAutor, linhaMac, linhaModo,
       linhaCanais, linhaBt, linhaSd, "Voltar",
   };
-  ihm::desenharListaRolavel("Sobre", linhas, 9, estado.offsetRolagem);
+  static_assert(sizeof(linhas) / sizeof(linhas[0]) == QTD_LINHAS_SOBRE,
+                "QTD_LINHAS_SOBRE desatualizado");
+  ihm::desenharListaRolavel("Sobre", linhas, QTD_LINHAS_SOBRE, estado.offsetRolagem);
 }
 
 void redesenharConexaoApp() {
@@ -2071,8 +2198,8 @@ void redesenharTesteCanais() {
   }
   itens[NUM_CHANNELS] = "Voltar";
 
-  uint8_t offsetFixo = 0;
-  ihm::desenharListaMenu("Teste de canais", itens, NUM_CHANNELS + 1, 0, offsetFixo);
+  ihm::desenharListaMenu("Teste de canais", itens, NUM_CHANNELS + 1, estado.indiceSelecionado,
+                          estado.offsetRolagem);
 }
 
 void redesenharExperimentoExecucao() {
@@ -2199,6 +2326,12 @@ void redesenharArquivoDados() {
 // Atualiza telas cujo conteúdo muda sozinho, sem entrada do encoder/tecla:
 // teste de canais (nível dos sensores) e execução de experimento (tempo,
 // eventos). Ambas são redesenhadas em um intervalo fixo, não a cada tick.
+// Invalida o cache de nivel dos LEDs do teste de canais (ver
+// atualizarTelasAoVivo). Existe porque o cache guarda o que foi ESCRITO na
+// fita, e sair da tela apaga a fita por fora dele.
+bool ledsTesteCanaisPrecisamReescrever = true;
+void forcarReescritaLedsTesteCanais() { ledsTesteCanaisPrecisamReescrever = true; }
+
 void atualizarTelasAoVivo() {
   // LEDs: acompanham o teste de canais tanto local (tela física em
   // Tela::TesteCanais) quanto remoto (app com a tela aberta, ver
@@ -2208,15 +2341,47 @@ void atualizarTelasAoVivo() {
   // enquanto o app testa, os dois só concordam, já que refletem o mesmo
   // nível físico).
   if (estado.telaAtual == Tela::TesteCanais || testeCanaisAtivoRemoto) {
+    // So escreve no LED quando o nivel do canal REALMENTE muda.
+    //
+    // Antes reescrevia os seis a cada tick, e cada ihm::controlarLED() faz
+    // um pixels.show() proprio — ou seja, seis atualizacoes completas da
+    // fita por volta do laco, centenas por segundo. Isso produzia o
+    // piscar: os LEDs eram reacendidos continuamente e nunca ficavam
+    // estaveis o bastante para a cor ser lida a olho. Alem disso, cada
+    // chamada refazia setBrightness(), que no Adafruit_NeoPixel reescala o
+    // buffer inteiro quando o valor muda — com o brilho alternando entre o
+    // do teste (30), o das indicacoes BLE (80) e o de desligar (0), a cor
+    // ia degradando a cada reescala.
+    //
+    // Com o cache abaixo, cada LED e escrito uma vez por transicao. Entre
+    // transicoes a fita nao e tocada.
+    static bool nivelAnteriorLed[NUM_CHANNELS] = {false};
+
     for (uint8_t canal1based = 1; canal1based <= NUM_CHANNELS; canal1based++) {
       const uint16_t indiceLed = canal1based - 1;
       if (indiceLed >= NUM_LEDS) break;
-      if (aquisicao::nivelAtual(canal1based)) {
-        ihm::controlarLED(indiceLed, 200, 0, 0, 30);
-      } else {
+
+      const bool nivel = aquisicao::nivelAtual(canal1based);
+      if (!ledsTesteCanaisPrecisamReescrever && nivel == nivelAnteriorLed[indiceLed])
+        continue;
+      nivelAnteriorLed[indiceLed] = nivel;
+
+      // Verde para nivel ALTO, vermelho para BAIXO — as mesmas cores que o
+      // aplicativo usa nesta tela (AppColors.levelHigh e o vermelho de
+      // erro, em lib/core/theme/app_colors.dart). Estavam invertidas em
+      // relacao ao app.
+      if (nivel) {
         ihm::controlarLED(indiceLed, 0, 150, 0, 30);
+      } else {
+        ihm::controlarLED(indiceLed, 200, 0, 0, 30);
       }
     }
+    ledsTesteCanaisPrecisamReescrever = false;
+  } else {
+    // Saiu da tela de teste: obriga a reescrever tudo quando voltar, senao
+    // o cache acharia que os LEDs ja estao na cor certa e eles ficariam
+    // apagados (voltarUmNivel() apaga a fita ao sair de TesteCanais).
+    forcarReescritaLedsTesteCanais();
   }
 
   if (estado.telaAtual == Tela::TesteCanais) {
@@ -2596,7 +2761,7 @@ void redesenharTelaAtual() {
       redesenharAnaliseCircularGrafico();
       break;
     default:
-      ihm::desenharMensagem(nomeTela(estado.telaAtual), "Em construcao. KEY volta.");
+      ihm::desenharMensagem(nomeTela(estado.telaAtual), "Em construcao. Toque em < para voltar.");
       break;
   }
 
@@ -2704,6 +2869,7 @@ void tick() {
   }
 
   bluetooth_app::loop();
+  executarCalibracaoToquePendente();
   imprimirHeartbeat();
 
   if (estado.telaAtual == Tela::Boot) {
@@ -2724,20 +2890,46 @@ void tick() {
 
   Command cmd;
 
-  const ihm::EventoEncoder evento = ihm::lerEventoEncoder();
-  if (evento == ihm::EventoEncoder::Horario) {
-    Serial.println("[ENCODER] Sentido: horario");
-    cmd.tipo = CommandType::Next;
-    processarComando(cmd, Origem::Local);
-  } else if (evento == ihm::EventoEncoder::AntiHorario) {
-    Serial.println("[ENCODER] Sentido: anti-horario");
-    cmd.tipo = CommandType::Previous;
+  // Le a tela touch e alimenta a fila de eventos. Um unico toque pode gerar
+  // varios eventos (mover N itens ate o item tocado + confirmar) — a
+  // traducao esta em ihm.cpp; daqui para baixo nada mudou em relacao a
+  // versao com encoder, e e de proposito: a navegacao inteira continua
+  // falando o mesmo vocabulario Next/Previous/Confirm/Back.
+  ihm::atualizarToque();
+
+  // Consome TODOS os passos de navegacao pendentes DENTRO DESTE MESMO tick,
+  // e so depois redesenha (o redesenho fica la embaixo, uma vez so).
+  //
+  // Isto e o que faz o cursor SALTAR direto para o item tocado. Antes, um
+  // passo era consumido por tick: como cada tick que redesenha leva dezenas
+  // de milissegundos, um toque tres itens abaixo produzia tres redesenhos
+  // em sequencia e o cursor aparecia "andando" ate la — a animacao de
+  // encoder, que fazia sentido quando os passos de fato chegavam um a um do
+  // giro, e nenhum sentido quando o usuario apontou o dedo no destino.
+  //
+  // Drenar a fila e seguro porque Next/Previous so movem a selecao dentro
+  // da tela atual; nenhum dos dois troca de tela nem dispara acao.
+  for (ihm::EventoNavegacao evento = ihm::lerEventoNavegacao();
+       evento != ihm::EventoNavegacao::Nenhum; evento = ihm::lerEventoNavegacao()) {
+    cmd.tipo = (evento == ihm::EventoNavegacao::Proximo) ? CommandType::Next
+                                                         : CommandType::Previous;
     processarComando(cmd, Origem::Local);
   }
 
-  if (ihm::teclaClicada()) {
-    Serial.println("[ENCODER] KEY confirmado");
+  if (ihm::confirmacaoSolicitada()) {
+    Serial.println("[TOQUE] Confirmado");
     cmd.tipo = CommandType::Confirm;
+    processarComando(cmd, Origem::Local);
+  }
+
+  // Novidade do touch: o botao "Voltar" do rodape. Com encoder so se
+  // voltava selecionando o item "Voltar" da lista (que continua existindo),
+  // e telas sem lista — grafico, mensagem — dependiam de clicar em qualquer
+  // lugar. O comando Back ja existia na maquina de estados; ate agora so o
+  // Bluetooth o emitia.
+  if (ihm::voltarSolicitado()) {
+    Serial.println("[TOQUE] Voltar");
+    cmd.tipo = CommandType::Back;
     processarComando(cmd, Origem::Local);
   }
 
@@ -2748,7 +2940,104 @@ void tick() {
   }
 }
 
+// Diz se a tela cuida do comando Back por conta propria (ou se ele deve ser
+// ignorado nela). Para todas as outras, processarComando() aplica o
+// comportamento generico: voltar um nivel.
+//
+// POR QUE ISTO EXISTE: com o encoder nao havia como emitir Back — so o
+// Bluetooth emitia, e a maioria dos tratadores de tela nunca chegou a
+// trata-lo. Quando o toque ganhou o botao "<" do rodape, ele passou a
+// emitir Back em TODAS as telas, e naquelas o comando chegava e ninguem
+// agia: o botao simplesmente nao fazia nada.
+//
+// A lista abaixo foi levantada lendo o despacho de comandos tela por tela.
+// A primeira versao dela errou por confiar em busca de texto, que casava
+// tambem com Back citado em COMENTARIO e com telas cujo Back so fechava um
+// modo de edicao sem ter para onde ir depois — por isso varias telas
+// continuavam sem saida pelo botao "<".
+//
+// E um switch exaustivo de proposito, sem "default": se alguem acrescentar
+// uma tela ao enum, o compilador avisa (-Wswitch) que ela precisa de uma
+// decisao aqui, em vez de herdar um comportamento silencioso.
+bool telaCuidaDoBack(Tela tela) {
+  switch (tela) {
+    // Raiz da navegacao: nao ha nivel acima para onde voltar.
+    case Tela::Boot:
+    case Tela::MenuPrincipal:
+      return true;
+
+    // Experimento EM ANDAMENTO. Voltar daqui abandonaria uma medicao em
+    // curso sem confirmacao — a saida e o item de cancelamento, que passa
+    // pela tela de confirmacao.
+    case Tela::ExperimentoExecucao:
+      return true;
+
+    // Editor de texto (nome de arquivo, renomear, senha): o Back chama
+    // cancelarEdicaoNomeArquivo(), que desfaz a edicao e ja volta um nivel.
+    case Tela::ExperimentoNomeArquivo:
+    case Tela::ArquivoRenomear:
+    case Tela::ConexaoAppRenomear:
+    case Tela::SenhaValidar:
+      return true;
+
+    // Seletores de valor: Back fecha a edicao se ela estiver aberta e volta
+    // de tela caso contrario (ver os tratadores).
+    case Tela::ExperimentoRepeticoes:
+    case Tela::AnaliseLinearDistancia:
+    case Tela::AnaliseCircularRaioVaos:
+      return true;
+
+    // Telas de analise que ja implementam Back chamando voltarUmNivel().
+    case Tela::ArquivoDados:
+    case Tela::AnaliseTipo:
+    case Tela::AnaliseLinearResultado:
+    case Tela::AnaliseLinearEscolherRepeticao:
+    case Tela::AnaliseLinearGrafico:
+    case Tela::AnaliseCircularResultado:
+    case Tela::AnaliseCircularEscolherRepeticao:
+    case Tela::AnaliseCircularGrafico:
+      return true;
+
+    // Todas as demais recebem o Back generico (voltar um nivel).
+    case Tela::Manual:
+    case Tela::Sobre:
+    case Tela::TesteCanais:
+    case Tela::Configuracoes:
+    case Tela::ModoOperacao:
+    case Tela::Brilho:
+    case Tela::Volume:
+    case Tela::AnaliseDadosToggle:
+    case Tela::ConfigCanais:
+    case Tela::ConfigCanaisTodos:
+    case Tela::ConfigCanaisTodosConfirmar:
+    case Tela::ConfigCanaisIndividualLista:
+    case Tela::ConfigCanaisIndividualEditar:
+    case Tela::ConfigCanaisIndividualConfirmar:
+    case Tela::ConfigCanaisVisualizar:
+    case Tela::ConfigCanaisRestaurarConfirmar:
+    case Tela::Experimentos:
+    case Tela::ExperimentoCancelarConfirmar:
+    case Tela::ExperimentoReiniciarConfirmar:
+    case Tela::ExperimentoSobrescreverConfirmar:
+    case Tela::GerenciamentoArquivos:
+    case Tela::ArquivoDetalhe:
+    case Tela::ArquivoExcluirConfirmar:
+    case Tela::ArquivosExcluirTodosConfirmar:
+    case Tela::ConexaoApp:
+    case Tela::AnaliseSelecionarArquivo:
+      return false;
+  }
+  return false;
+}
+
 void processarComando(const Command& cmd, Origem /*origem*/) {
+  // Back generico: antes de qualquer despacho por tela. Ver telaCuidaDoBack().
+  if (cmd.tipo == CommandType::Back && !telaCuidaDoBack(estado.telaAtual)) {
+    Serial.printf("[NAV] Back generico a partir de %s\n", nomeTela(estado.telaAtual));
+    voltarUmNivel();
+    return;
+  }
+
   // Comandos "globais": agem direto sobre os módulos (as MESMAS funções que
   // as telas locais chamam), independente da tela atual. Na prática só o
   // Bluetooth os emite hoje — o encoder local só gera
@@ -2935,6 +3224,18 @@ void processarComando(const Command& cmd, Origem /*origem*/) {
         definirTodosLeds(0, 0, 0, 0);
       }
       return;
+    case CommandType::CalibrateTouch: {
+      // Só agenda: quem calibra é tick(), fora do mutex do Bluetooth (ver
+      // calibracaoToquePendente).
+      const char* motivo = motivoRecusaCalibracaoToque();
+      if (motivo != nullptr) {
+        bluetooth_app::publicarCalibracaoToque("recusada", motivo);
+        return;
+      }
+      calibracaoToquePendente = true;
+      bluetooth_app::publicarCalibracaoToque("iniciada");
+      return;
+    }
     default:
       break;
   }
@@ -3053,6 +3354,12 @@ void processarComando(const Command& cmd, Origem /*origem*/) {
       break;
     case Tela::AnaliseCircularGrafico:
       tratarAnaliseCircularGrafico(cmd);
+      break;
+    case Tela::Sobre:
+      tratarSobre(cmd);
+      break;
+    case Tela::TesteCanais:
+      tratarTesteCanais(cmd);
       break;
     case Tela::Boot:
       break;

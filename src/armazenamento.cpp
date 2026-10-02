@@ -3,6 +3,7 @@
 #include <Arduino.h>
 #include <SD.h>
 #include <SPI.h>
+#include <TFT_eSPI.h>
 #include <cstdio>
 #include <cstring>
 #include <freertos/FreeRTOS.h>
@@ -30,6 +31,24 @@ QueueHandle_t filaLinhas = nullptr;
 File arquivoAtual;
 bool arquivoAberto = false;
 bool cartaoOk = false;
+
+// Frequências de tentativa do cartão. 20MHz primeiro; se o cartão ou a
+// fiação não aguentarem, cai para 4MHz em vez de desistir.
+constexpr uint32_t SD_FREQ_RAPIDA = 20000000;
+constexpr uint32_t SD_FREQ_LENTA = 4000000;
+
+// O cartão TEM que subir na MESMA instância SPIClass que o TFT_eSPI usa.
+// Com -DUSE_HSPI_PORT a tela fica no SPI3; se o SD subisse no objeto "SPI"
+// global (SPI2) usando os mesmos GPIO, o begin() dele reatribuiria o
+// roteamento daqueles pinos ao SPI2 e a TELA PARARIA DE RESPONDER — sem
+// erro nenhum, só um display mudo. getSPIinstance() devolve o barramento
+// que a tela já inicializou.
+bool iniciarCartao() {
+  SPIClass& barramento = TFT_eSPI::getSPIinstance();
+  if (SD.begin(SD_CS_PIN, barramento, SD_FREQ_RAPIDA)) return true;
+  Serial.println("[SD] Falhou em 20MHz, tentando 4MHz");
+  return SD.begin(SD_CS_PIN, barramento, SD_FREQ_LENTA);
+}
 uint32_t erros = 0;
 
 char bufferFlush[STORAGE_FLUSH_THRESHOLD][24];
@@ -66,15 +85,9 @@ SemaphoreHandle_t mutexArquivo = nullptr;
 // existir; não há ainda nenhum acesso ao SD para disputar o barramento).
 SemaphoreHandle_t mutexBarramentoSPI = nullptr;
 
-// true = último lado a reconfigurar fisicamente o barramento foi o
-// display; false = foi o SD. Só existe para evitar reconfigurar
-// (SPI.begin()/pinMode()) quando o dono não mudou — ver comentário grande
-// em armazenamento.hpp. Começa true: ihm::init() (display->begin(), via
-// Arduino_SWSPI bit-bang) sempre roda antes de armazenamento::init() nesta
-// aplicação, então os pinos já estão fisicamente em modo GPIO/bit-bang
-// quando o primeiro TravaBarramentoSD desta sessão é construído — sem
-// isto, o SD.begin() inicial rodaria achando (por causa do valor padrão)
-// que não precisa chamar SPI.begin(), e ficaria sem resposta física.
+// Mantido só para a API pública (donoAtualEhDisplay/marcarDonoDisplay) não
+// mudar. Ele perdeu a função original neste porte — ver o comentário grande
+// em TravaBarramentoSD, logo abaixo.
 bool donoEhDisplay = true;
 
 // ---------------------------------------------------------------------
@@ -88,41 +101,33 @@ bool donoEhDisplay = true;
 // ---------------------------------------------------------------------
 uint32_t contadorTrocasBarramento = 0;
 
-// RAII: toma o mutex do barramento e, só se o dono estiver de fato
-// mudando (do display para o SD), rotea os pinos de volta para o
-// periférico de SPI de hardware. Chamar SPI.begin() incondicionalmente a
-// cada acesso — inclusive entre leituras consecutivas do próprio SD, como
-// uma linha de BMP após a outra — reinicializa o periférico de SPI dezenas
-// de vezes por segundo e corrompe o estado interno do cartão na prática.
+// RAII: serializa o acesso ao barramento SPI compartilhado com o display.
+//
+// ESTA CLASSE ENCOLHEU MUITO NESTE PORTE, E ISSO É UMA CORREÇÃO, NÃO UM
+// ATALHO. Na versão anterior o display era bit-bang (Arduino_SWSPI, via
+// digitalWrite) e o cartão usava o periférico de SPI de hardware nos MESMOS
+// pinos. Como um pino roteado para o periférico deixa de obedecer
+// digitalWrite(), cada troca de dono exigia reconfigurar pinMode() de um
+// lado e SPI.end()/SPI.begin() do outro — uma dança frágil que, na prática,
+// corrompia o estado interno do cartão quando acontecia muitas vezes
+// seguidas (as falhas "sdSelectCard(): Select Failed" e "File system is not
+// mounted" documentadas naquela versão).
+//
+// Aqui os dois lados usam o MESMO periférico de SPI de hardware, com a
+// mesma instância SPIClass (a do TFT_eSPI — ver init() abaixo), e se
+// distinguem apenas pelo CS, que é exatamente como um barramento SPI
+// compartilhado deve funcionar. Não há mais dono para trocar: nenhum pino é
+// reconfigurado, nenhum SPI.begin() é refeito, e as falhas de cartão que
+// vinham daí deixam de ser possíveis por construção.
+//
+// O que continua necessário é o mutex: o desenho roda no núcleo 1 e a
+// gravação no cartão no núcleo 0, e uma operação de desenho do TFT_eSPI
+// mantém o CS ativo por várias transferências seguidas — deixar o SD
+// intercalar no meio disso misturaria as duas conversas no mesmo fio.
 class TravaBarramentoSD {
  public:
   TravaBarramentoSD() {
     if (mutexBarramentoSPI != nullptr) xSemaphoreTake(mutexBarramentoSPI, portMAX_DELAY);
-    if (donoEhDisplay) {
-      logDiagnosticoBarramento("ANTES troca Display->SD");
-      // Desseleciona o TFT (CS em HIGH) ANTES de usar o SPI de hardware
-      // para o SD — simétrico à mesma proteção do lado do display (ver
-      // TravaBarramentoDisplay em ihm.cpp). Sem isto, se TFT_CS ficasse em
-      // LOW durante o tráfego SPI do SD, o controlador do display
-      // interpretaria esse tráfego como comandos endereçados a ele.
-      pinMode(TFT_CS, OUTPUT);
-      digitalWrite(TFT_CS, HIGH);
-      // SPI.begin() só reanexa SCK/MISO/MOSI ao periférico de hardware na
-      // PRIMEIRA vez que é chamado nesta instância — depois disso, se _spi
-      // já não é nulo, ele retorna sem reanexar nada (ver
-      // SPIClass::begin() em SPI.cpp: "if (_spi) { return; }"). Como
-      // TravaBarramentoDisplay desanexa esses pinos de propósito
-      // (pinMode() para bit-bang), sem o end() aqui o SPI.begin() abaixo
-      // virava no-op a partir da segunda troca de dono: os pinos ficavam
-      // presos em modo GPIO simples, nunca voltavam a ser roteados para o
-      // periférico SPI, e o cartão ficava sem resposta física dali em
-      // diante ("sdSelectCard(): Select Failed" mesmo após remontar).
-      SPI.end();
-      SPI.begin(TFT_SCLK, TFT_MISO, TFT_MOSI, SD_CS_PIN);
-      donoEhDisplay = false;
-      contadorTrocasBarramento++;
-      logDiagnosticoBarramento("DEPOIS troca Display->SD");
-    }
   }
   ~TravaBarramentoSD() {
     if (mutexBarramentoSPI != nullptr) xSemaphoreGive(mutexBarramentoSPI);
@@ -147,7 +152,7 @@ bool remontarCartaoSD() {
   // dono (display->SD), remontar imediatamente pode bater na mesma falha.
   delay(50);
   logDiagnosticoBarramento("ANTES remontarCartaoSD (SD.begin)");
-  const bool ok = SD.begin(SD_CS_PIN);
+  const bool ok = iniciarCartao();
   Serial.printf("[SD] Remontagem: %s\n", ok ? "sucesso" : "falha");
   logDiagnosticoBarramento("DEPOIS remontarCartaoSD");
   return ok;
@@ -223,7 +228,7 @@ void init() {
 
   Serial.println("[SD] Iniciando microSD");
   TravaBarramentoSD travaBus;
-  cartaoOk = SD.begin(SD_CS_PIN);
+  cartaoOk = iniciarCartao();
   if (!cartaoOk) {
     Serial.println("[SD] Falha ao montar o cartao (verifique SD_CS_PIN em MAIN.HPP)");
     Serial.println("[SD] Aplicacao continuara em modo sem armazenamento");

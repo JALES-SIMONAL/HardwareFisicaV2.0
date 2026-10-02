@@ -96,6 +96,13 @@ void publicarResultadoNomeMedicao(bool ok, bool nomeExiste);
 // pra o app saber qual pedido falhou/teve sucesso.
 void publicarResultadoAcaoProtegida(const char* acao, bool ok);
 
+// Andamento da calibração do toque pedida pela ação "calibrate_touch":
+// "iniciada" (o equipamento está esperando os toques nos 4 cantos),
+// "concluida" ou "recusada". Em "recusada", [motivo] diz por quê:
+// "experimento" (há um em andamento), "sem_display" ou "sem_toque"
+// (controlador XPT2046 não respondeu no boot). nullptr omite o campo.
+void publicarCalibracaoToque(const char* estado, const char* motivo = nullptr);
+
 // Derruba a conexão BLE atual (se houver), forçando o app a reconectar —
 // usado pelo item "Reconectar" da tela "Conexao com app".
 void reconectar();

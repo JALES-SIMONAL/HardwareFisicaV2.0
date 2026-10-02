@@ -185,6 +185,10 @@ void desenharValorEditavel(const char* titulo, int32_t valor, int32_t minimo,
 void desenharListaRolavel(const char* titulo, const char* const* linhas,
 						  uint8_t quantidade, uint8_t offsetRolagem);
 
+// Quantas linhas desenharListaRolavel() mostra de uma vez — para quem rola
+// saber o maior offsetRolagem útil.
+uint8_t linhasVisiveisListaRolavel();
+
 // Mensagem simples centralizada (avisos, telas de status).
 void desenharMensagem(const char* titulo, const char* mensagem);
 

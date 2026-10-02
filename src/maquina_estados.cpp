@@ -1602,6 +1602,62 @@ void tratarTelaEmConstrucao(const Command& cmd) {
   }
 }
 
+// Linhas de texto da tela "Sobre" (ver redesenharSobre()).
+constexpr uint8_t QTD_LINHAS_SOBRE = 9;
+
+// "Sobre" tem mais linhas do que cabem na tela e antes caia em
+// tratarTelaEmConstrucao(), que ignora Next/Previous: as ultimas linhas
+// (BT, SD...) nunca apareciam. Agora ^ v e o arrasto rolam o texto, e a
+// barra de rolagem mostra onde se esta.
+void tratarSobre(const Command& cmd) {
+  const uint8_t visiveis = ihm::linhasVisiveisListaRolavel();
+  const uint8_t offsetMaximo =
+      (QTD_LINHAS_SOBRE > visiveis) ? static_cast<uint8_t>(QTD_LINHAS_SOBRE - visiveis) : 0;
+  switch (cmd.tipo) {
+    case CommandType::Next:
+      if (estado.offsetRolagem < offsetMaximo) {
+        estado.offsetRolagem++;
+        precisaRedesenhar = true;
+      }
+      break;
+    case CommandType::Previous:
+      if (estado.offsetRolagem > 0) {
+        estado.offsetRolagem--;
+        precisaRedesenhar = true;
+      }
+      break;
+    case CommandType::Confirm:
+      voltarUmNivel();
+      break;
+    default:
+      break;
+  }
+}
+
+// "Teste de canais" lista os 6 canais + "Voltar", mais do que as 4 linhas
+// que cabem, e era desenhada com selecao e rolagem fixas em 0: C5, C6 e
+// Voltar ficavam fora da tela sem jeito de chegar a eles. Navega como
+// qualquer menu; so "Voltar" faz algo ao ser escolhido.
+void tratarTesteCanais(const Command& cmd) {
+  constexpr uint8_t QTD_ITENS = NUM_CHANNELS + 1;
+  switch (cmd.tipo) {
+    case CommandType::Next:
+      estado.indiceSelecionado = (estado.indiceSelecionado + 1) % QTD_ITENS;
+      precisaRedesenhar = true;
+      break;
+    case CommandType::Previous:
+      estado.indiceSelecionado =
+          (estado.indiceSelecionado == 0) ? QTD_ITENS - 1 : estado.indiceSelecionado - 1;
+      precisaRedesenhar = true;
+      break;
+    case CommandType::Confirm:
+      if (estado.indiceSelecionado == NUM_CHANNELS) voltarUmNivel();
+      break;
+    default:
+      break;
+  }
+}
+
 void tratarConfiguracoes(const Command& cmd) {
   switch (cmd.tipo) {
     case CommandType::Next:
@@ -2083,7 +2139,9 @@ void redesenharSobre() {
       linhaNome, linhaVersao, linhaAutor, linhaMac, linhaModo,
       linhaCanais, linhaBt, linhaSd, "Voltar",
   };
-  ihm::desenharListaRolavel("Sobre", linhas, 9, estado.offsetRolagem);
+  static_assert(sizeof(linhas) / sizeof(linhas[0]) == QTD_LINHAS_SOBRE,
+                "QTD_LINHAS_SOBRE desatualizado");
+  ihm::desenharListaRolavel("Sobre", linhas, QTD_LINHAS_SOBRE, estado.offsetRolagem);
 }
 
 void redesenharConexaoApp() {
@@ -2140,8 +2198,8 @@ void redesenharTesteCanais() {
   }
   itens[NUM_CHANNELS] = "Voltar";
 
-  uint8_t offsetFixo = 0;
-  ihm::desenharListaMenu("Teste de canais", itens, NUM_CHANNELS + 1, 0, offsetFixo);
+  ihm::desenharListaMenu("Teste de canais", itens, NUM_CHANNELS + 1, estado.indiceSelecionado,
+                          estado.offsetRolagem);
 }
 
 void redesenharExperimentoExecucao() {
@@ -3296,6 +3354,12 @@ void processarComando(const Command& cmd, Origem /*origem*/) {
       break;
     case Tela::AnaliseCircularGrafico:
       tratarAnaliseCircularGrafico(cmd);
+      break;
+    case Tela::Sobre:
+      tratarSobre(cmd);
+      break;
+    case Tela::TesteCanais:
+      tratarTesteCanais(cmd);
       break;
     case Tela::Boot:
       break;

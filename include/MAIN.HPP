@@ -408,6 +408,25 @@ constexpr int16_t UI_RAIO_BOTAO = 5;
 // outra tela".
 constexpr bool UI_MOSTRAR_SETA_ITEM = true;
 
+// Barra de rolagem a direita das listas que tem mais itens do que cabem na
+// tela. Largura total da coluna reservada (px), incluindo o respiro entre o
+// cartao e a barra; quando a lista cabe inteira a coluna nao existe e os
+// cartoes voltam a ocupar a largura toda.
+constexpr int16_t UI_LARGURA_COLUNA_ROLAGEM = 10;
+constexpr int16_t UI_LARGURA_BARRA_ROLAGEM = 6;
+constexpr uint16_t UI_COR_TRILHO_ROLAGEM = UI_COR_CARTAO;
+constexpr uint16_t UI_COR_POLEGAR_ROLAGEM = UI_COR_TEXTO_SECUNDARIO;
+
+// Teclado de texto: recuo (px), de cada lado, da AREA SENSIVEL de uma tecla
+// em relacao a celula dela. As teclas sao vizinhas sem espaco entre si;
+// com o recuo, sobra entre duas teclas uma faixa de 2x este valor que nao
+// responde ao toque, e um dedo que cai na divisa nao aciona a tecla do
+// lado. A tecla desenhada e um pouco maior que a area sensivel
+// (UI_TECLADO_RECUO_VISUAL < UI_TECLADO_FOLGA_TOQUE): erra-se mais para fora
+// da borda do que para dentro, e o que importa e a divisa ser morta.
+constexpr int16_t UI_TECLADO_FOLGA_TOQUE = 5;
+constexpr int16_t UI_TECLADO_RECUO_VISUAL = 3;
+
 // Quando true, todo texto da IHM local é desenhado duas vezes — a segunda
 // com 1px de deslocamento horizontal — pra simular negrito ("double
 // strike"): a fonte embutida da biblioteca de display não tem uma

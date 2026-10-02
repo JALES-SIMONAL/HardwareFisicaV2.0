@@ -141,6 +141,43 @@ bool precisaRedesenhar = false;
 // app. Ver atualizarTelasAoVivo() e aoDesconectarBluetooth().
 bool testeCanaisAtivoRemoto = false;
 
+// true entre o app pedir "calibrate_touch" e tick() executar a calibração.
+// O comando NAO calibra na hora: ele chega por bluetooth_app::loop(), que
+// segura o mutex do Bluetooth enquanto processa a fila — e a calibração
+// bloqueia por segundos esperando os 4 toques. Feita ali, prenderia o mutex
+// esse tempo todo e travaria publicarEvento() na tarefa de aquisição.
+bool calibracaoToquePendente = false;
+
+// Por que o app não pode calibrar agora, ou nullptr se pode. Mesmo
+// critério do item local "Recalibrar toque", mais as checagens que o menu
+// local dispensa por só existir com tela e toque funcionando.
+const char* motivoRecusaCalibracaoToque() {
+  if (experimentos::emAndamento()) return "experimento";
+  if (!ihm::displayDisponivel()) return "sem_display";
+  // toqueDisponivel() só é false aqui se o XPT2046 não respondeu no boot:
+  // calibrar seria esperar para sempre um toque que nunca chega.
+  if (!ihm::toqueDisponivel()) return "sem_toque";
+  return nullptr;
+}
+
+void executarCalibracaoToquePendente() {
+  if (!calibracaoToquePendente) return;
+  calibracaoToquePendente = false;
+
+  // Rechecado: comandos que chegaram no mesmo lote, depois do
+  // "calibrate_touch" (ex.: start_experiment), já foram processados.
+  const char* motivo = motivoRecusaCalibracaoToque();
+  if (motivo != nullptr) {
+    bluetooth_app::publicarCalibracaoToque("recusada", motivo);
+    return;
+  }
+
+  Serial.println("[TOUCH] Calibracao pedida pelo app");
+  ihm::calibrarToque();
+  bluetooth_app::publicarCalibracaoToque("concluida");
+  precisaRedesenhar = true;
+}
+
 // Pilha de navegação: cada navegarPara() empilha a tela de origem; cada
 // voltarUmNivel() desempilha. Substitui um antigo campo único "tela
 // anterior" (histórico de só 1 nível) que travava o botão Voltar em
@@ -2774,6 +2811,7 @@ void tick() {
   }
 
   bluetooth_app::loop();
+  executarCalibracaoToquePendente();
   imprimirHeartbeat();
 
   if (estado.telaAtual == Tela::Boot) {
@@ -3128,6 +3166,18 @@ void processarComando(const Command& cmd, Origem /*origem*/) {
         definirTodosLeds(0, 0, 0, 0);
       }
       return;
+    case CommandType::CalibrateTouch: {
+      // Só agenda: quem calibra é tick(), fora do mutex do Bluetooth (ver
+      // calibracaoToquePendente).
+      const char* motivo = motivoRecusaCalibracaoToque();
+      if (motivo != nullptr) {
+        bluetooth_app::publicarCalibracaoToque("recusada", motivo);
+        return;
+      }
+      calibracaoToquePendente = true;
+      bluetooth_app::publicarCalibracaoToque("iniciada");
+      return;
+    }
     default:
       break;
   }

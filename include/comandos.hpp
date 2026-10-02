@@ -53,7 +53,11 @@ enum class CommandType : uint8_t {
   // acendiam, porque quem os aciona é atualizarTelasAoVivo() em
   // maquina_estados.cpp, condicionado só à tela LOCAL — ver
   // testeCanaisAtivoRemoto.
-  SetChannelTestActive
+  SetChannelTestActive,
+  // Recalibrar o toque a partir do app — o mesmo "Recalibrar toque" do menu
+  // de configurações local. Útil justamente quando a calibração ficou tão
+  // ruim que não dá mais para chegar no item pela própria tela.
+  CalibrateTouch
 };
 
 enum class Origem : uint8_t { Local, Bluetooth };
